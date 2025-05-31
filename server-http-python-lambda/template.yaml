@@ -19,33 +19,10 @@ Parameters:
 Globals:
   Function:
     Timeout: 60
-    Runtime: python3.12
+    MemorySize: 1600
     Architectures: [x86_64]
 
 Resources:
-  ChromeAwsLambdaLayer:
-    Type: AWS::Lambda::LayerVersion
-    Properties:
-      LayerName: !Sub "${AWS::StackName}-chrome-aws-lambda-layer"
-      Description: "Chrome binary and Playwright dependencies for Lambda"
-      Content:
-        S3Bucket: !Ref ChromeLayerBucket
-        S3Key: "chrome-aws-lambda-layer.zip"
-      CompatibleRuntimes:
-        - python3.12
-      CompatibleArchitectures:
-        - x86_64
-
-  ChromeLayerBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "${AWS::StackName}-chrome-layer-bucket"
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-
   McpApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -95,19 +72,16 @@ Resources:
   McpServerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: app.lambda_handler
-      CodeUri: server/
+      PackageType: Image
+      ImageConfig:
+        Command: ["app.lambda_handler"]
       Timeout: 60
       MemorySize: 1600
-      Layers:
-        - !Ref ChromeAwsLambdaLayer
       Environment:
         Variables:
           MCP_SESSION_TABLE: !Ref McpSessionsTable
           GOOGLE_API_KEY: !Ref GoogleApiKey
           GOOGLE_SEARCH_ENGINE_ID: !Ref GoogleSearchEngineId
-          PLAYWRIGHT_BROWSERS_PATH: /opt/chrome
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
       Policies:
         - Statement:
             - Effect: Allow
@@ -131,8 +105,6 @@ Resources:
             Path: /mcp
             Method: ANY
             RestApiId: !Ref McpApi
-            Auth:
-              Authorizer: TokenAuthorizer
 
 Outputs:
   MCPServerApi:

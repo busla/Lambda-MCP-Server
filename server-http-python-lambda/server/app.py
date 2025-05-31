@@ -8,9 +8,7 @@ from bs4 import BeautifulSoup
 import json
 import re
 from typing import List, Dict, Tuple
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
+SKLEARN_AVAILABLE = False
 # Get session table name from environment variable
 session_table = os.environ.get('MCP_SESSION_TABLE', 'mcp_sessions')
 
@@ -311,6 +309,13 @@ def _apply_rag_processing(query: str, results: List[Dict], chunk_size: int = 500
             }
         }
         
+    except ImportError:
+        return {
+            'status': 'error',
+            'message': 'LangChain dependencies not available. Install langchain, sentence-transformers, and faiss-cpu for RAG functionality.',
+            'chunks': [],
+            'fallback_used': False
+        }
     except Exception as e:
         return {
             'status': 'error',
@@ -373,6 +378,12 @@ def _apply_tfidf_rag_processing(query: str, chunks: List) -> Dict:
             }
         }
         
+    except ImportError:
+        return {
+            'status': 'error',
+            'message': 'scikit-learn not available for TF-IDF processing. Install scikit-learn for fallback RAG functionality.',
+            'chunks': []
+        }
     except Exception as e:
         return {
             'status': 'error',
@@ -414,4 +425,4 @@ def _create_content_summary(query: str, content: str, max_length: int = 300) -> 
 
 def lambda_handler(event, context):
     """AWS Lambda handler function."""
-    return mcp_server.handle_request(event, context)                                                                    
+    return mcp_server.handle_request(event, context)                                                                            
