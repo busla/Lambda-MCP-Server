@@ -3,3 +3,4 @@ boto3==1.37.37
 requests==2.31.0
 beautifulsoup4==4.12.2
 google-api-python-client==2.108.0
+playwright==1.41.1

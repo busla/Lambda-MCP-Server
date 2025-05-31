@@ -38,12 +38,13 @@ def count_s3_buckets() -> int:
     return len(response['Buckets'])
 
 @mcp_server.tool()
-def google_search_and_scrape(query: str, num_results: int = 3) -> str:
+def google_search_and_scrape(query: str, num_results: int = 3, use_playwright: bool = False) -> str:
     """Search Google and scrape content from the top results.
     
     Args:
         query: The search query to execute
         num_results: Number of results to return and scrape (default 3, max 10)
+        use_playwright: Whether to use Playwright for JavaScript-rendered content (default False)
         
     Returns:
         JSON string containing search results with scraped content
@@ -76,29 +77,14 @@ def google_search_and_scrape(query: str, num_results: int = 3) -> str:
                 'title': item.get('title', ''),
                 'url': item.get('link', ''),
                 'snippet': item.get('snippet', ''),
-                'scraped_content': ''
+                'scraped_content': '',
+                'scraping_method': 'playwright' if use_playwright else 'requests'
             }
             
-            try:
-                page_response = requests.get(result['url'], timeout=10, headers={
-                    'User-Agent': 'Mozilla/5.0 (compatible; MCP-Server/1.0)'
-                })
-                page_response.raise_for_status()
-                
-                soup = BeautifulSoup(page_response.content, 'html.parser')
-                
-                for script in soup(["script", "style"]):
-                    script.decompose()
-                
-                text = soup.get_text()
-                lines = (line.strip() for line in text.splitlines())
-                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                text = ' '.join(chunk for chunk in chunks if chunk)
-                
-                result['scraped_content'] = text[:2000] + ('...' if len(text) > 2000 else '')
-                
-            except Exception as scrape_error:
-                result['scraped_content'] = f"Error scraping content: {str(scrape_error)}"
+            if use_playwright:
+                result['scraped_content'] = _scrape_with_playwright(result['url'])
+            else:
+                result['scraped_content'] = _scrape_with_requests(result['url'])
             
             results.append(result)
         
@@ -111,6 +97,70 @@ def google_search_and_scrape(query: str, num_results: int = 3) -> str:
     except Exception as e:
         return json.dumps({"error": f"Search failed: {str(e)}"})
 
+def _scrape_with_requests(url: str) -> str:
+    """Scrape content using requests + BeautifulSoup (fast, no JavaScript)"""
+    try:
+        response = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; MCP-Server/1.0)'
+        })
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        for script in soup(["script", "style"]):
+            script.decompose()
+        
+        text = soup.get_text()
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = ' '.join(chunk for chunk in chunks if chunk)
+        
+        return text[:2000] + ('...' if len(text) > 2000 else '')
+        
+    except Exception as scrape_error:
+        return f"Error scraping content: {str(scrape_error)}"
+
+
+def _scrape_with_playwright(url: str) -> str:
+    """Scrape content using Playwright (slower, supports JavaScript)"""
+    try:
+        from playwright.sync_api import sync_playwright
+        
+        with sync_playwright() as p:
+            if os.environ.get('AWS_LAMBDA_FUNCTION_NAME'):
+                browser = p.chromium.launch(
+                    executable_path='/opt/chrome/chrome',
+                    headless=True,
+                    args=[
+                        '--no-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--single-process',
+                        '--no-zygote',
+                        '--disable-web-security'
+                    ]
+                )
+            else:
+                browser = p.chromium.launch(headless=True)
+            
+            try:
+                page = browser.new_page()
+                page.set_default_timeout(10000)
+                
+                page.goto(url, wait_until='domcontentloaded')
+                page.wait_for_timeout(2000)
+                
+                text = page.evaluate('() => document.body.innerText')
+                
+                return text[:2000] + ('...' if len(text) > 2000 else '')
+                
+            finally:
+                browser.close()
+                
+    except Exception as scrape_error:
+        return f"Error scraping with Playwright: {str(scrape_error)}"
+
+
 def lambda_handler(event, context):
     """AWS Lambda handler function."""
-    return mcp_server.handle_request(event, context)  
+    return mcp_server.handle_request(event, context)     
