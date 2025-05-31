@@ -107,6 +107,8 @@ Resources:
             Path: /mcp
             Method: ANY
             RestApiId: !Ref McpApi
+            Auth:
+              Authorizer: TokenAuthorizer
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: .
