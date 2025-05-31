@@ -40,6 +40,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: app.lambda_handler
+      Runtime: python3.12
       CodeUri: authorizer/
       Environment:
         Variables:
@@ -73,6 +74,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       PackageType: Image
+      CodeUri: .
       ImageConfig:
         Command: ["app.lambda_handler"]
       Timeout: 60
@@ -105,6 +107,10 @@ Resources:
             Path: /mcp
             Method: ANY
             RestApiId: !Ref McpApi
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: python3.12-v1
 
 Outputs:
   MCPServerApi:
