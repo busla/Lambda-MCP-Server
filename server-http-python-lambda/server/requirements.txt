@@ -1,2 +1,5 @@
 # No direct requirements needed - all provided by the layer 
 boto3==1.37.37
+requests==2.31.0
+beautifulsoup4==4.12.2
+google-api-python-client==2.108.0

@@ -7,6 +7,14 @@ Parameters:
     Type: String
     NoEcho: true
     Description: "The authentication token for MCP"
+  GoogleApiKey:
+    Type: String
+    NoEcho: true
+    Description: "Google Custom Search API Key"
+  GoogleSearchEngineId:
+    Type: String
+    NoEcho: true
+    Description: "Google Custom Search Engine ID"
 
 Globals:
   Function:
@@ -69,6 +77,8 @@ Resources:
       Environment:
         Variables:
           MCP_SESSION_TABLE: !Ref McpSessionsTable
+          GOOGLE_API_KEY: !Ref GoogleApiKey
+          GOOGLE_SEARCH_ENGINE_ID: !Ref GoogleSearchEngineId
       Policies:
         - Statement:
             - Effect: Allow

@@ -51,11 +51,7 @@ class SessionManager:
                         'AttributeType': 'S'
                     }
                 ],
-                BillingMode='PAY_PER_REQUEST',
-                TimeToLiveSpecification={
-                    'Enabled': True,
-                    'AttributeName': 'expires_at'
-                }
+                BillingMode='PAY_PER_REQUEST'
             )
             
             # Wait for table to be created
@@ -154,4 +150,4 @@ class SessionManager:
             return True
         except Exception as e:
             logger.error(f"Error deleting session {session_id}: {e}")
-            return False 
+            return False  
