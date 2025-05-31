@@ -107,6 +107,7 @@ fi
 # Run the container
 echo "🚀 Running the client container..."
 docker run -it \
+    --network host \
     -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
     -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
     -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
@@ -115,4 +116,4 @@ docker run -it \
     -e MCP_URL="$MCP_URL" \
     -e MCP_TOKEN="$MCP_TOKEN" \
     -v "$(pwd)/client/src:/app/src" \
-    mcp-client 
+    mcp-client   

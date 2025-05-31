@@ -185,7 +185,7 @@ class LambdaMCPServer:
             "MCP-Version": "0.6"
         }
         if session_id:
-            headers["MCP-Session-Id"] = session_id
+            headers["mcp-session-id"] = session_id
             
         return {
             "statusCode": status_code or self._error_code_to_http_status(code),
@@ -213,7 +213,7 @@ class LambdaMCPServer:
             "MCP-Version": "0.6"
         }
         if session_id:
-            headers["MCP-Session-Id"] = session_id
+            headers["mcp-session-id"] = session_id
             
         return {
             "statusCode": 200,
@@ -285,14 +285,14 @@ class LambdaMCPServer:
             if request.method == "initialize":
                 logger.info("Handling initialize request")
                 # Create new session
-                session_id = self.session_manager.create_session()
-                current_session_id.set(session_id)
+                new_session_id = self.session_manager.create_session()
+                current_session_id.set(new_session_id)
                 result = InitializeResult(
                     protocolVersion="2024-11-05",
                     serverInfo=ServerInfo(name=self.name, version=self.version),
                     capabilities=Capabilities(tools={"list": True, "call": True})
                 )
-                return self._create_success_response(result.model_dump(), request.id, session_id)
+                return self._create_success_response(result.model_dump(), request.id, new_session_id)
             
             # For all other requests, validate session if provided
             if session_id:
@@ -306,7 +306,16 @@ class LambdaMCPServer:
                         'data': {}
                     }
             elif request.method != "initialize":
-                return self._create_error_response(-32000, "Session required", request.id, status_code=400)
+                logger.warning("No session ID provided, creating temporary session for local testing")
+                temp_session_id = f"temp-{int(time.time())}"
+                self.session_manager.memory_sessions[temp_session_id] = {
+                    'session_id': temp_session_id,
+                    'expires_at': int(time.time()) + (24 * 60 * 60),
+                    'created_at': int(time.time()),
+                    'data': {}
+                }
+                session_id = temp_session_id
+                current_session_id.set(session_id)
                 
             # Handle tools/list request
             if request.method == "tools/list":
@@ -338,4 +347,4 @@ class LambdaMCPServer:
             return self._create_error_response(-32000, str(e), request_id, session_id=session_id)
         finally:
             # Clear session context
-            current_session_id.set(None)  
+            current_session_id.set(None)        
