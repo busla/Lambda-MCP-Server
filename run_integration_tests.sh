@@ -1,10 +1,29 @@
 #!/bin/bash
 set -e
 
-echo "🐳 Lambda MCP Server Integration Test Runner"
-echo "============================================="
+echo "🐳 REAL Lambda MCP Server Integration Test Runner"
+echo "================================================="
+echo "⚠️  This script runs REAL integration tests with actual API calls"
+echo "================================================="
 
-CONTAINER_NAME="lambda-mcp-integration-test"
+if [ -z "$GOOGLE_API_KEY" ] || [ -z "$GOOGLE_SEARCH_ENGINE_ID" ]; then
+    echo "❌ ERROR: Real integration tests require valid Google API credentials"
+    echo "Please set the following environment variables:"
+    echo "  export GOOGLE_API_KEY='your-google-api-key'"
+    echo "  export GOOGLE_SEARCH_ENGINE_ID='your-search-engine-id'"
+    echo ""
+    echo "To get these credentials:"
+    echo "1. Go to https://console.developers.google.com/"
+    echo "2. Create a project and enable Custom Search JSON API"
+    echo "3. Create API credentials (API key)"
+    echo "4. Go to https://cse.google.com/ to create a Custom Search Engine"
+    echo "5. Get the Search Engine ID from the control panel"
+    exit 1
+fi
+
+echo "✅ Google API credentials found - proceeding with real integration tests"
+
+CONTAINER_NAME="lambda-mcp-real-integration-test"
 CONTAINER_PORT="9000"
 IMAGE_NAME="lambda-mcp-server:latest"
 LAMBDA_URL="http://localhost:${CONTAINER_PORT}/2015-03-31/functions/function/invocations"
@@ -56,7 +75,7 @@ cd ..
 
 cleanup
 
-log_info "Starting Lambda container..."
+log_info "Starting Lambda container with REAL API credentials..."
 docker run -d \
     --name $CONTAINER_NAME \
     -p $CONTAINER_PORT:8080 \
@@ -64,12 +83,12 @@ docker run -d \
     -e AWS_ACCESS_KEY_ID=dummy \
     -e AWS_SECRET_ACCESS_KEY=dummy \
     -e MCP_SESSION_TABLE=test-sessions \
-    -e GOOGLE_API_KEY=dummy-key-for-testing \
-    -e GOOGLE_SEARCH_ENGINE_ID=dummy-cx-for-testing \
+    -e GOOGLE_API_KEY="$GOOGLE_API_KEY" \
+    -e GOOGLE_SEARCH_ENGINE_ID="$GOOGLE_SEARCH_ENGINE_ID" \
     $IMAGE_NAME
 
 log_info "Waiting for container to be ready..."
-sleep 5
+sleep 8
 
 if ! docker ps | grep -q $CONTAINER_NAME; then
     log_error "Container failed to start"
@@ -80,7 +99,7 @@ fi
 log_success "Container is running"
 
 log_info "Waiting for Lambda runtime to initialize..."
-sleep 3
+sleep 5
 
 log_info "Testing basic connectivity..."
 max_retries=10
@@ -104,20 +123,18 @@ if [ $retry_count -eq $max_retries ]; then
     exit 1
 fi
 
-log_info "Running integration tests..."
+log_info "Running REAL integration tests with actual API calls..."
 export LAMBDA_CONTAINER_URL="$LAMBDA_URL"
 
 if python3 integration_tests.py; then
-    log_success "All integration tests passed!"
+    log_success "All REAL integration tests passed!"
+    log_success "Lambda MCP Server is fully functional with real Google API integration!"
     exit_code=0
 else
-    log_error "Some integration tests failed"
-    exit_code=1
-fi
-
-if [ $exit_code -ne 0 ]; then
+    log_error "Some real integration tests failed"
     log_info "Container logs for debugging:"
     docker logs $CONTAINER_NAME
+    exit_code=1
 fi
 
 exit $exit_code

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Integration tests for Lambda MCP Server running in container
-Tests MCP protocol, Google search tool, RAG processing, and error handling
+Real integration tests for Lambda MCP Server running in container
+Tests actual functionality with real Google API calls (no mocks)
 """
 import json
 import requests
@@ -10,10 +10,16 @@ import sys
 import os
 from typing import Dict, Any, List
 
-class LambdaContainerTester:
+class RealIntegrationTester:
     def __init__(self, lambda_url: str = "http://localhost:9000/2015-03-31/functions/function/invocations"):
         self.lambda_url = lambda_url
-        self.session_id = f"test-session-{int(time.time())}"
+        self.session_id = f"real-integration-{int(time.time())}"
+        
+        self.google_api_key = os.environ.get("GOOGLE_API_KEY")
+        self.google_cx = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+        
+        if not self.google_api_key or not self.google_cx:
+            raise ValueError("GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID environment variables are required for real integration tests")
         
     def invoke_lambda(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """Invoke Lambda function with given event"""
@@ -21,7 +27,7 @@ class LambdaContainerTester:
             response = requests.post(
                 self.lambda_url,
                 json=event,
-                timeout=30,
+                timeout=60,
                 headers={"Content-Type": "application/json"}
             )
             response.raise_for_status()
@@ -124,15 +130,15 @@ class LambdaContainerTester:
             print(f"❌ Tools list response parsing failed: {e}")
             return False
     
-    def test_google_search_basic(self) -> bool:
-        """Test basic Google search functionality"""
-        print("🧪 Testing Google Search (Basic)...")
+    def test_real_google_search(self) -> bool:
+        """Test real Google search with actual API calls"""
+        print("🔍 Testing real Google search functionality...")
         
         event = self.create_mcp_event("tools/call", {
             "name": "googleSearchAndScrape",
             "arguments": {
-                "query": "python programming tutorial",
-                "num_results": 2,
+                "query": "Python programming tutorial",
+                "num_results": 3,
                 "use_playwright": False,
                 "use_rag": False,
                 "chunk_size": 500
@@ -159,74 +165,110 @@ class LambdaContainerTester:
                 
             search_data = json.loads(content[0]["text"])
             
-            if search_data.get("total_results", 0) == 0:
-                print("❌ No search results found")
+            if "error" in search_data:
+                print(f"❌ Google search API error: {search_data['error']}")
                 return False
-                
-            results = search_data.get("results", [])
-            if not results:
-                print("❌ Empty results array")
-                return False
-                
-            first_result = results[0]
-            required_fields = ["title", "url", "snippet", "scraped_content"]
-            missing_fields = [field for field in required_fields if field not in first_result]
             
-            if missing_fields:
-                print(f"❌ Missing result fields: {missing_fields}")
-                return False
+            if "results" in search_data and len(search_data["results"]) > 0:
+                results = search_data["results"]
+                print(f"✅ Google search returned {len(results)} real results")
                 
-            print(f"✅ Google search successful - {len(results)} results")
-            return True
+                for i, result_item in enumerate(results):
+                    if not result_item.get("title") or not result_item.get("url"):
+                        print(f"❌ Result {i+1} missing title or URL")
+                        return False
+                    
+                    if not result_item.get("scraped_content") or len(result_item["scraped_content"]) < 50:
+                        print(f"❌ Result {i+1} has insufficient scraped content")
+                        return False
+                
+                print(f"✅ All {len(results)} results have valid scraped content")
+                
+                sample = results[0]
+                print(f"   Sample result: {sample['title'][:50]}...")
+                print(f"   Content length: {len(sample['scraped_content'])} chars")
+                
+                return True
+            else:
+                print(f"❌ No search results returned from Google API")
+                return False
             
         except Exception as e:
-            print(f"❌ Google search response parsing failed: {e}")
+            print(f"❌ Real Google search test failed: {e}")
             return False
     
-    def test_google_search_with_rag(self) -> bool:
-        """Test Google search with RAG processing"""
-        print("🧪 Testing Google Search with RAG...")
+    def test_real_rag_processing(self) -> bool:
+        """Test RAG processing with real search results"""
+        print("🧠 Testing RAG processing with real data...")
         
         event = self.create_mcp_event("tools/call", {
             "name": "googleSearchAndScrape",
             "arguments": {
-                "query": "machine learning basics",
-                "num_results": 1,
+                "query": "machine learning fundamentals",
+                "num_results": 2,
                 "use_playwright": False,
                 "use_rag": True,
-                "chunk_size": 300
+                "chunk_size": 500
             }
         })
         
         result = self.invoke_lambda(event)
         
         if "error" in result:
-            print(f"❌ RAG search failed: {result['error']}")
+            print(f"❌ RAG processing failed: {result['error']}")
             return False
             
         try:
             body = json.loads(result["body"])
+            
+            if "error" in body:
+                print(f"❌ RAG processing returned error: {body['error']}")
+                return False
+                
             content = body.get("result", {}).get("content", [])
+            if not content:
+                print("❌ No RAG processing results returned")
+                return False
+                
             search_data = json.loads(content[0]["text"])
             
-            rag_analysis = search_data.get("rag_analysis")
-            if not rag_analysis:
-                print("❌ RAG analysis not found in response")
+            if "error" in search_data:
+                print(f"❌ RAG processing error: {search_data['error']}")
                 return False
+            
+            if "rag_analysis" in search_data:
+                rag_analysis = search_data["rag_analysis"]
                 
-            if rag_analysis.get("status") not in ["success", "fallback"]:
-                print(f"❌ RAG processing failed: {rag_analysis.get('message', 'Unknown error')}")
+                if rag_analysis.get("status") != "completed":
+                    print(f"❌ RAG processing not completed: {rag_analysis}")
+                    return False
+                
+                total_chunks = rag_analysis.get("total_chunks", 0)
+                relevant_chunks = rag_analysis.get("relevant_chunks", 0)
+                
+                if total_chunks == 0:
+                    print(f"❌ No chunks processed in RAG analysis")
+                    return False
+                
+                if relevant_chunks == 0:
+                    print(f"❌ No relevant chunks found in RAG analysis")
+                    return False
+                
+                print(f"✅ RAG processing completed successfully")
+                print(f"   Total chunks processed: {total_chunks}")
+                print(f"   Relevant chunks found: {relevant_chunks}")
+                print(f"   Relevance ratio: {relevant_chunks/total_chunks*100:.1f}%")
+                
+                if "summary" in rag_analysis and rag_analysis["summary"]:
+                    print(f"   Summary generated: {len(rag_analysis['summary'])} chars")
+                
+                return True
+            else:
+                print(f"❌ No RAG analysis in response")
                 return False
-                
-            if rag_analysis.get("total_chunks", 0) == 0:
-                print("❌ No chunks processed by RAG")
-                return False
-                
-            print(f"✅ RAG processing successful - {rag_analysis.get('total_chunks')} chunks, {rag_analysis.get('relevant_chunks', 0)} relevant")
-            return True
             
         except Exception as e:
-            print(f"❌ RAG search response parsing failed: {e}")
+            print(f"❌ Real RAG processing test failed: {e}")
             return False
     
     def test_error_handling(self) -> bool:
@@ -309,18 +351,35 @@ class LambdaContainerTester:
         print(f"✅ Session management successful - session: {returned_session}")
         return True
 
-def run_integration_tests():
-    """Run all integration tests"""
-    print("🚀 Starting Lambda MCP Server Integration Tests")
-    print("=" * 60)
+def run_real_integration_tests():
+    """Run all real integration tests"""
+    print("🚀 Starting REAL Lambda MCP Server Integration Tests")
+    print("=" * 70)
+    print("⚠️  These tests make actual API calls and require valid credentials")
+    print("=" * 70)
     
-    tester = LambdaContainerTester()
+    required_env_vars = ["GOOGLE_API_KEY", "GOOGLE_SEARCH_ENGINE_ID"]
+    missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+    
+    if missing_vars:
+        print(f"❌ Missing required environment variables: {missing_vars}")
+        print("   Please set these variables before running real integration tests")
+        print("   Example:")
+        print("   export GOOGLE_API_KEY='your-api-key'")
+        print("   export GOOGLE_SEARCH_ENGINE_ID='your-search-engine-id'")
+        return False
+    
+    try:
+        tester = RealIntegrationTester()
+    except ValueError as e:
+        print(f"❌ Setup failed: {e}")
+        return False
     
     tests = [
         ("MCP Initialize", tester.test_mcp_initialize),
         ("Tools List", tester.test_tools_list),
-        ("Google Search Basic", tester.test_google_search_basic),
-        ("Google Search with RAG", tester.test_google_search_with_rag),
+        ("Real Google Search", tester.test_real_google_search),
+        ("Real RAG Processing", tester.test_real_rag_processing),
         ("Error Handling", tester.test_error_handling),
         ("Session Management", tester.test_session_management)
     ]
@@ -339,17 +398,19 @@ def run_integration_tests():
             print(f"❌ {test_name} crashed: {e}")
             failed += 1
     
-    print("\n" + "=" * 60)
-    print(f"🎯 Integration Test Results:")
+    print("\n" + "=" * 70)
+    print(f"🎯 Real Integration Test Results:")
     print(f"   ✅ Passed: {passed}")
     print(f"   ❌ Failed: {failed}")
     print(f"   📊 Success Rate: {passed/(passed+failed)*100:.1f}%")
     
     if failed == 0:
-        print("\n🎉 All integration tests passed!")
+        print("\n🎉 All real integration tests passed!")
+        print("   The Lambda MCP Server is fully functional with real API calls!")
         return True
     else:
-        print(f"\n⚠️  {failed} test(s) failed - check container configuration")
+        print(f"\n⚠️  {failed} real integration test(s) failed")
+        print("   Check the error messages above for details")
         return False
 
 if __name__ == "__main__":
@@ -357,8 +418,18 @@ if __name__ == "__main__":
     
     print(f"Testing Lambda container at: {container_url}")
     
-    os.environ.setdefault("GOOGLE_API_KEY", "dummy-key-for-testing")
-    os.environ.setdefault("GOOGLE_SEARCH_ENGINE_ID", "dummy-cx-for-testing")
+    if not os.environ.get("GOOGLE_API_KEY") or not os.environ.get("GOOGLE_SEARCH_ENGINE_ID"):
+        print("\n❌ ERROR: Real integration tests require valid Google API credentials")
+        print("Please set the following environment variables:")
+        print("  export GOOGLE_API_KEY='your-google-api-key'")
+        print("  export GOOGLE_SEARCH_ENGINE_ID='your-search-engine-id'")
+        print("\nTo get these credentials:")
+        print("1. Go to https://console.developers.google.com/")
+        print("2. Create a project and enable Custom Search JSON API")
+        print("3. Create API credentials (API key)")
+        print("4. Go to https://cse.google.com/ to create a Custom Search Engine")
+        print("5. Get the Search Engine ID from the control panel")
+        sys.exit(1)
     
-    success = run_integration_tests()
+    success = run_real_integration_tests()
     sys.exit(0 if success else 1)

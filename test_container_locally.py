@@ -56,8 +56,8 @@ def test_container_start():
         "-e AWS_ACCESS_KEY_ID=dummy "
         "-e AWS_SECRET_ACCESS_KEY=dummy "
         "-e MCP_SESSION_TABLE=test-sessions "
-        "-e GOOGLE_API_KEY=dummy-key "
-        "-e GOOGLE_SEARCH_ENGINE_ID=dummy-cx "
+        "-e GOOGLE_API_KEY=test-dummy-key "
+        "-e GOOGLE_SEARCH_ENGINE_ID=test-dummy-cx "
         "lambda-mcp-test"
     )
     
