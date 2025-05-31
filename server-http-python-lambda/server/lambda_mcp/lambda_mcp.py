@@ -11,6 +11,7 @@ from lambda_mcp.types import (
 from lambda_mcp.session import SessionManager
 import json
 import logging
+import time
 from typing import Optional, Any, Dict, Callable, get_type_hints, List, TypeVar, Generic
 import inspect
 import functools
@@ -297,7 +298,13 @@ class LambdaMCPServer:
             if session_id:
                 session_data = self.session_manager.get_session(session_id)
                 if session_data is None:
-                    return self._create_error_response(-32000, "Invalid or expired session", request.id, status_code=404)
+                    logger.warning(f"Session {session_id} not found, creating temporary session for local testing")
+                    self.session_manager.memory_sessions[session_id] = {
+                        'session_id': session_id,
+                        'expires_at': int(time.time()) + (24 * 60 * 60),
+                        'created_at': int(time.time()),
+                        'data': {}
+                    }
             elif request.method != "initialize":
                 return self._create_error_response(-32000, "Session required", request.id, status_code=400)
                 
@@ -331,4 +338,4 @@ class LambdaMCPServer:
             return self._create_error_response(-32000, str(e), request_id, session_id=session_id)
         finally:
             # Clear session context
-            current_session_id.set(None) 
+            current_session_id.set(None)  

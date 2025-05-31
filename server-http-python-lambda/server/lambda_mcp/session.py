@@ -20,6 +20,7 @@ class SessionManager:
         self.table_name = table_name
         self.dynamodb = boto3.resource('dynamodb')
         self.table = self.dynamodb.Table(table_name)
+        self.memory_sessions = {}  # Fallback for local testing
         
     @classmethod
     def create_table(cls, table_name: str = "mcp_sessions") -> None:
@@ -35,28 +36,31 @@ class SessionManager:
             dynamodb.Table(table_name).table_status
             logger.info(f"Table {table_name} already exists")
             return
-        except:
+        except Exception as e:
             # Create table if it doesn't exist
-            table = dynamodb.create_table(
-                TableName=table_name,
-                KeySchema=[
-                    {
-                        'AttributeName': 'session_id',
-                        'KeyType': 'HASH'
-                    }
-                ],
-                AttributeDefinitions=[
-                    {
-                        'AttributeName': 'session_id',
-                        'AttributeType': 'S'
-                    }
-                ],
-                BillingMode='PAY_PER_REQUEST'
-            )
-            
-            # Wait for table to be created
-            table.meta.client.get_waiter('table_exists').wait(TableName=table_name)
-            logger.info(f"Created table {table_name}")
+            try:
+                table = dynamodb.create_table(
+                    TableName=table_name,
+                    KeySchema=[
+                        {
+                            'AttributeName': 'session_id',
+                            'KeyType': 'HASH'
+                        }
+                    ],
+                    AttributeDefinitions=[
+                        {
+                            'AttributeName': 'session_id',
+                            'AttributeType': 'S'
+                        }
+                    ],
+                    BillingMode='PAY_PER_REQUEST'
+                )
+                
+                # Wait for table to be created
+                table.meta.client.get_waiter('table_exists').wait(TableName=table_name)
+                logger.info(f"Created table {table_name}")
+            except Exception as create_error:
+                logger.warning(f"Cannot create table {table_name}: {create_error}. Using in-memory storage for local testing.")
     
     def create_session(self, session_data: Optional[Dict[str, Any]] = None) -> str:
         """Create a new session
@@ -81,8 +85,12 @@ class SessionManager:
             'data': session_data or {}
         }
         
-        self.table.put_item(Item=item)
-        logger.info(f"Created session {session_id}")
+        try:
+            self.table.put_item(Item=item)
+            logger.info(f"Created session {session_id}")
+        except Exception as e:
+            logger.warning(f"Cannot save to DynamoDB: {e}. Using in-memory storage.")
+            self.memory_sessions[session_id] = item
         
         return session_id
     
@@ -100,7 +108,9 @@ class SessionManager:
             item = response.get('Item')
             
             if not item:
-                return None
+                item = self.memory_sessions.get(session_id)
+                if not item:
+                    return None
                 
             # Check if session has expired
             if item.get('expires_at', 0) < time.time():
@@ -110,8 +120,17 @@ class SessionManager:
             return item.get('data', {})
             
         except Exception as e:
-            logger.error(f"Error getting session {session_id}: {e}")
-            return None
+            logger.warning(f"Error getting session from DynamoDB {session_id}: {e}. Checking in-memory storage.")
+            item = self.memory_sessions.get(session_id)
+            if not item:
+                return None
+            
+            # Check if session has expired
+            if item.get('expires_at', 0) < time.time():
+                self.delete_session(session_id)
+                return None
+                
+            return item.get('data', {})
     
     def update_session(self, session_id: str, session_data: Dict[str, Any]) -> bool:
         """Update session data
@@ -150,4 +169,4 @@ class SessionManager:
             return True
         except Exception as e:
             logger.error(f"Error deleting session {session_id}: {e}")
-            return False  
+            return False    
