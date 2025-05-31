@@ -86,6 +86,11 @@ class SessionManager:
         }
         
         try:
+            try:
+                self.table.table_status
+            except Exception:
+                SessionManager.create_table(self.table_name)
+            
             self.table.put_item(Item=item)
             logger.info(f"Created session {session_id}")
         except Exception as e:
@@ -169,4 +174,4 @@ class SessionManager:
             return True
         except Exception as e:
             logger.error(f"Error deleting session {session_id}: {e}")
-            return False    
+            return False      

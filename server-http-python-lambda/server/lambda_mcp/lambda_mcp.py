@@ -50,8 +50,6 @@ class LambdaMCPServer:
         self.tools: Dict[str, Dict] = {}
         self.tool_implementations: Dict[str, Callable] = {}
         self.session_manager = SessionManager(table_name=session_table)
-        # Ensure session table exists
-        self.session_manager.create_table(table_name=session_table)
     
     def get_session(self) -> Optional[SessionData]:
         """Get the current session data wrapper.
@@ -347,4 +345,4 @@ class LambdaMCPServer:
             return self._create_error_response(-32000, str(e), request_id, session_id=session_id)
         finally:
             # Clear session context
-            current_session_id.set(None)        
+            current_session_id.set(None)          
