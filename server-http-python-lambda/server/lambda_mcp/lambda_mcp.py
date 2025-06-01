@@ -323,6 +323,10 @@ class LambdaMCPServer:
                     error_content = [ErrorContent(text=str(e)).model_dump()]
                     return self._create_error_response(-32603, f"Error executing tool: {str(e)}", request.id, error_content, session_id)
 
+            if request.method == "ping":
+                logger.info("Handling ping request")
+                return self._create_success_response({}, request.id, session_id)
+
             # Handle unknown methods
             return self._create_error_response(-32601, f"Method not found: {request.method}", request.id, session_id=session_id)
 
@@ -331,4 +335,4 @@ class LambdaMCPServer:
             return self._create_error_response(-32000, str(e), request_id, session_id=session_id)
         finally:
             # Clear session context
-            current_session_id.set(None) 
+            current_session_id.set(None)  
