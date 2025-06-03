@@ -10,14 +10,34 @@ def lambda_handler(event, context):
     
     # Check if it's a Bearer token
     if not auth_header.startswith('Bearer '):
-        raise Exception('Unauthorized')  # Return 401 if no valid Authorization header
+        return {
+            'principalId': 'unauthorized',
+            'policyDocument': {
+                'Version': '2012-10-17',
+                'Statement': [{
+                    'Action': 'execute-api:Invoke',
+                    'Effect': 'Deny',
+                    'Resource': method_arn
+                }]
+            }
+        }
         
     # Extract and validate token
     token = auth_header.split(' ')[1]
     expected_token = os.environ.get('MCP_AUTH_TOKEN')
     
     if not expected_token or token != expected_token:
-        raise Exception('Unauthorized')
+        return {
+            'principalId': 'unauthorized',
+            'policyDocument': {
+                'Version': '2012-10-17',
+                'Statement': [{
+                    'Action': 'execute-api:Invoke',
+                    'Effect': 'Deny',
+                    'Resource': method_arn
+                }]
+            }
+        }
         
     # Generate the IAM policy
     return {
@@ -30,4 +50,4 @@ def lambda_handler(event, context):
                 'Resource': method_arn
             }]
         }
-    } 
+    }  

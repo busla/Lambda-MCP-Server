@@ -7,12 +7,31 @@ Parameters:
     Type: String
     NoEcho: true
     Description: "The authentication token for MCP"
+  GoogleApiKey:
+    Type: String
+    NoEcho: true
+    Description: "Google Custom Search API Key"
+  GoogleSearchEngineId:
+    Type: String
+    NoEcho: true
+    Description: "Google Custom Search Engine ID"
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: "GitHub Personal Access Token for API access"
+  Architecture:
+    Type: String
+    Default: x86_64
+    AllowedValues:
+      - x86_64
+      - arm64
+    Description: "Lambda function architecture"
 
 Globals:
   Function:
     Timeout: 60
-    Runtime: python3.12
-    Architectures: [x86_64]
+    MemorySize: 1600
+    Architectures: [!Ref Architecture]
 
 Resources:
   McpApi:
@@ -32,6 +51,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: app.lambda_handler
+      Runtime: python3.12
       CodeUri: authorizer/
       Environment:
         Variables:
@@ -64,11 +84,18 @@ Resources:
   McpServerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: app.lambda_handler
-      CodeUri: server/
+      PackageType: Image
+      CodeUri: .
+      ImageConfig:
+        Command: ["app.lambda_handler"]
+      Timeout: 60
+      MemorySize: 1600
       Environment:
         Variables:
           MCP_SESSION_TABLE: !Ref McpSessionsTable
+          GOOGLE_API_KEY: !Ref GoogleApiKey
+          GOOGLE_SEARCH_ENGINE_ID: !Ref GoogleSearchEngineId
+          GITHUB_TOKEN: !Ref GitHubToken
       Policies:
         - Statement:
             - Effect: Allow
@@ -94,6 +121,10 @@ Resources:
             RestApiId: !Ref McpApi
             Auth:
               Authorizer: TokenAuthorizer
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: python3.12-v1
 
 Outputs:
   MCPServerApi:

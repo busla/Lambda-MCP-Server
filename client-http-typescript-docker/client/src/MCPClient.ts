@@ -9,9 +9,13 @@ export class MCPClient extends EventEmitter {
   private client: Client;
   // private transport: SSEClientTransport;
   private transport: StreamableHTTPClientTransport;
+  private apiToken: string;
+  private serverUrl: string;
 
   constructor(serverUrl: string, apiToken: string) {
     super();
+    this.apiToken = apiToken;
+    this.serverUrl = serverUrl;
     this.client = new Client({
       name: 'mcp-bedrock-demo',
       version: '1.0.0'
@@ -52,7 +56,39 @@ export class MCPClient extends EventEmitter {
     return result.tools;
   }
 
-  async callTool(name: string, toolArgs: Record<string, any>): Promise<CallToolResult> {
+  async callTool(name: string, toolArgs: Record<string, any>, customHeaders?: Record<string, string>): Promise<CallToolResult> {
+    if (customHeaders) {
+      const mergedHeaders = {
+        'Authorization': `Bearer ${this.apiToken}`,
+        ...customHeaders
+      };
+      
+      // Create a temporary transport with custom headers for this call
+      const tempTransport = new StreamableHTTPClientTransport(
+        new URL(this.serverUrl),
+        {
+          requestInit: {
+            headers: mergedHeaders
+          }
+        }
+      );
+      
+      // Create a temporary client for this call
+      const tempClient = new Client({
+        name: 'mcp-bedrock-demo',
+        version: '1.0.0'
+      });
+      
+      await tempClient.connect(tempTransport);
+      const result = await tempClient.callTool({
+        name,
+        arguments: toolArgs
+      });
+      await tempTransport.close();
+      
+      return result;
+    }
+    
     return await this.client.callTool({
       name,
       arguments: toolArgs
@@ -62,4 +98,4 @@ export class MCPClient extends EventEmitter {
   async close(): Promise<void> {
     await this.transport.close();
   }
-} 
+}      

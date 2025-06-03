@@ -79,10 +79,10 @@ fi
 AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId')
 AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey')
 AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.SessionToken')
-AWS_REGION=$(aws configure get region)
+AWS_REGION=$(aws configure get region 2>/dev/null || echo "")
 
 if [ -z "$AWS_REGION" ]; then
-    AWS_REGION="us-west-2"
+    AWS_REGION="${AWS_DEFAULT_REGION:-us-west-2}"
     echo "⚠️  No AWS region found in config, defaulting to $AWS_REGION"
 else
     echo "✅ Using region: $AWS_REGION"
@@ -107,6 +107,7 @@ fi
 # Run the container
 echo "🚀 Running the client container..."
 docker run -it \
+    --network host \
     -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
     -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
     -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
@@ -115,4 +116,4 @@ docker run -it \
     -e MCP_URL="$MCP_URL" \
     -e MCP_TOKEN="$MCP_TOKEN" \
     -v "$(pwd)/client/src:/app/src" \
-    mcp-client 
+    mcp-client      
