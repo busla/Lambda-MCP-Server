@@ -302,6 +302,10 @@ class LambdaMCPServer:
                 )
                 return self._create_success_response(result.model_dump(), request.id, new_session_id)
             
+            if request.method == "ping":
+                logger.info("Handling ping request")
+                return self._create_success_response({}, request.id, session_id)
+            
             # For all other requests, validate session if provided
             if session_id:
                 session_data = self.session_manager.get_session(session_id)
@@ -358,4 +362,4 @@ class LambdaMCPServer:
             return self._create_error_response(-32000, str(e), request_id, session_id=session_id)
         finally:
             # Clear session context
-            current_session_id.set(None)                    
+            current_session_id.set(None)                              
