@@ -1,4 +1,4 @@
-from lambda_mcp.lambda_mcp import LambdaMCPServer
+from lambda_mcp.lambda_mcp import LambdaMCPServer, get_request_headers
 from datetime import datetime, timezone
 import random
 import boto3
@@ -9,6 +9,9 @@ import json
 import re
 from typing import List, Dict, Tuple
 from datetime import timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 SKLEARN_AVAILABLE = False
 # Get session table name from environment variable
 session_table = os.environ.get('MCP_SESSION_TABLE', 'mcp_sessions')
@@ -452,13 +455,25 @@ def generate_github_worklog(github_username: str, days_back: int = 30) -> str:
         - Daily breakdown with detailed activity logs
         - Billable hours calculation (90% rate)
         
-    Requires:
-        GITHUB_TOKEN environment variable with appropriate scopes (read:user, repo)
+    Authentication:
+        - Accepts GitHub token via 'GitHub-Token' request header (preferred)
+        - Falls back to GITHUB_TOKEN environment variable
+        - Requires token with appropriate scopes (read:user, repo)
     """
     try:
-        github_token = os.environ.get('GITHUB_TOKEN')
+        request_headers = get_request_headers()
+        github_token = None
+        
+        if request_headers and 'github-token' in request_headers:
+            github_token = request_headers['github-token']
+            logger.info("Using GitHub token from request headers")
+        else:
+            github_token = os.environ.get('GITHUB_TOKEN')
+            if github_token:
+                logger.info("Using GitHub token from environment variable")
+        
         if not github_token:
-            return json.dumps({"error": "GitHub token not configured. Set GITHUB_TOKEN environment variable."})
+            return json.dumps({"error": "GitHub token not provided. Pass GitHub-Token header or set GITHUB_TOKEN environment variable."})
         
         headers = {
             'Authorization': f'token {github_token}',
@@ -995,4 +1010,4 @@ def _generate_daily_breakdown(work_sessions: List[Dict]) -> Dict:
 
 def lambda_handler(event, context):
     """AWS Lambda handler function."""
-    return mcp_server.handle_request(event, context)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+    return mcp_server.handle_request(event, context)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            

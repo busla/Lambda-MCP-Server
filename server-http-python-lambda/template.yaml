@@ -15,6 +15,10 @@ Parameters:
     Type: String
     NoEcho: true
     Description: "Google Custom Search Engine ID"
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: "GitHub Personal Access Token for API access"
   Architecture:
     Type: String
     Default: x86_64
@@ -91,6 +95,7 @@ Resources:
           MCP_SESSION_TABLE: !Ref McpSessionsTable
           GOOGLE_API_KEY: !Ref GoogleApiKey
           GOOGLE_SEARCH_ENGINE_ID: !Ref GoogleSearchEngineId
+          GITHUB_TOKEN: !Ref GitHubToken
       Policies:
         - Statement:
             - Effect: Allow

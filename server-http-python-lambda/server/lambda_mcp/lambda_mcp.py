@@ -21,8 +21,18 @@ logger = logging.getLogger(__name__)
 
 # Context variable to store current session ID
 current_session_id: ContextVar[Optional[str]] = ContextVar('current_session_id', default=None)
+# Context variable to store current request headers
+current_request_headers: ContextVar[Optional[Dict[str, str]]] = ContextVar('current_request_headers', default=None)
 
 T = TypeVar('T')
+
+def get_request_headers() -> Optional[Dict[str, str]]:
+    """Get the current request headers from context.
+    
+    Returns:
+        Dictionary of request headers or None if no headers available
+    """
+    return current_request_headers.get()
 
 class SessionData(Generic[T]):
     """Helper class for type-safe session data access"""
@@ -329,6 +339,7 @@ class LambdaMCPServer:
                     return self._create_error_response(-32601, f"Tool '{tool_name}' not found", request.id, session_id=session_id)
                 
                 try:
+                    current_request_headers.set(headers)
                     result = self.tool_implementations[tool_name](**tool_args)
                     content = [TextContent(text=str(result)).model_dump()]
                     return self._create_success_response({"content": content}, request.id, session_id)
@@ -336,6 +347,8 @@ class LambdaMCPServer:
                     logger.error(f"Error executing tool {tool_name}: {e}")
                     error_content = [ErrorContent(text=str(e)).model_dump()]
                     return self._create_error_response(-32603, f"Error executing tool: {str(e)}", request.id, error_content, session_id)
+                finally:
+                    current_request_headers.set(None)
 
             # Handle unknown methods
             return self._create_error_response(-32601, f"Method not found: {request.method}", request.id, session_id=session_id)
@@ -345,4 +358,4 @@ class LambdaMCPServer:
             return self._create_error_response(-32000, str(e), request_id, session_id=session_id)
         finally:
             # Clear session context
-            current_session_id.set(None)          
+            current_session_id.set(None)                    
