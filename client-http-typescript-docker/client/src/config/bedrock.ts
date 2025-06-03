@@ -20,6 +20,6 @@ Remember: Each tool call is expensive, so use them judiciously while still provi
 };
 
 export const serverConfig = {
-    url: process.env.MCP_URL || 'http://localhost:3000',
-    apiToken: process.env.MCP_TOKEN || '123123'
-}; 
+    url: process.env.MCP_URL || 'http://localhost:8000/mcp',
+    apiToken: process.env.MCP_TOKEN || 'test-token'
+};   

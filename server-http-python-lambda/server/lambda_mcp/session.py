@@ -18,8 +18,8 @@ class SessionManager:
             table_name: Name of DynamoDB table to use for sessions
         """
         self.table_name = table_name
-        self.dynamodb = boto3.resource('dynamodb')
-        self.table = self.dynamodb.Table(table_name)
+        self.dynamodb = None
+        self.table = None
         self.memory_sessions = {}  # Fallback for local testing
         
     @classmethod
@@ -62,6 +62,16 @@ class SessionManager:
             except Exception as create_error:
                 logger.warning(f"Cannot create table {table_name}: {create_error}. Using in-memory storage for local testing.")
     
+    def _ensure_dynamodb_connection(self):
+        """Ensure DynamoDB connection is established"""
+        if self.dynamodb is None:
+            try:
+                self.dynamodb = boto3.resource('dynamodb')
+                self.table = self.dynamodb.Table(self.table_name)
+            except Exception as e:
+                logger.warning(f"Cannot connect to DynamoDB: {e}. Using in-memory storage.")
+                self.dynamodb = False  # Mark as failed to avoid retrying
+    
     def create_session(self, session_data: Optional[Dict[str, Any]] = None) -> str:
         """Create a new session
         
@@ -85,16 +95,22 @@ class SessionManager:
             'data': session_data or {}
         }
         
-        try:
+        self._ensure_dynamodb_connection()
+        
+        if self.dynamodb and self.dynamodb is not False:
             try:
-                self.table.table_status
-            except Exception:
-                SessionManager.create_table(self.table_name)
-            
-            self.table.put_item(Item=item)
-            logger.info(f"Created session {session_id}")
-        except Exception as e:
-            logger.warning(f"Cannot save to DynamoDB: {e}. Using in-memory storage.")
+                try:
+                    self.table.table_status
+                except Exception:
+                    SessionManager.create_table(self.table_name)
+                
+                self.table.put_item(Item=item)
+                logger.info(f"Created session {session_id}")
+            except Exception as e:
+                logger.warning(f"Cannot save to DynamoDB: {e}. Using in-memory storage.")
+                self.memory_sessions[session_id] = item
+        else:
+            logger.info(f"Using in-memory storage for session {session_id}")
             self.memory_sessions[session_id] = item
         
         return session_id
@@ -108,34 +124,38 @@ class SessionManager:
         Returns:
             Session data or None if not found
         """
-        try:
-            response = self.table.get_item(Key={'session_id': session_id})
-            item = response.get('Item')
-            
-            if not item:
-                item = self.memory_sessions.get(session_id)
+        self._ensure_dynamodb_connection()
+        
+        if self.dynamodb and self.dynamodb is not False:
+            try:
+                response = self.table.get_item(Key={'session_id': session_id})
+                item = response.get('Item')
+                
                 if not item:
+                    item = self.memory_sessions.get(session_id)
+                    if not item:
+                        return None
+                    
+                # Check if session has expired
+                if item.get('expires_at', 0) < time.time():
+                    self.delete_session(session_id)
                     return None
+                    
+                return item.get('data', {})
                 
-            # Check if session has expired
-            if item.get('expires_at', 0) < time.time():
-                self.delete_session(session_id)
-                return None
-                
-            return item.get('data', {})
+            except Exception as e:
+                logger.warning(f"Error getting session from DynamoDB {session_id}: {e}. Checking in-memory storage.")
+        
+        item = self.memory_sessions.get(session_id)
+        if not item:
+            return None
+        
+        # Check if session has expired
+        if item.get('expires_at', 0) < time.time():
+            self.delete_session(session_id)
+            return None
             
-        except Exception as e:
-            logger.warning(f"Error getting session from DynamoDB {session_id}: {e}. Checking in-memory storage.")
-            item = self.memory_sessions.get(session_id)
-            if not item:
-                return None
-            
-            # Check if session has expired
-            if item.get('expires_at', 0) < time.time():
-                self.delete_session(session_id)
-                return None
-                
-            return item.get('data', {})
+        return item.get('data', {})
     
     def update_session(self, session_id: str, session_data: Dict[str, Any]) -> bool:
         """Update session data
@@ -174,4 +194,4 @@ class SessionManager:
             return True
         except Exception as e:
             logger.error(f"Error deleting session {session_id}: {e}")
-            return False      
+            return False            
