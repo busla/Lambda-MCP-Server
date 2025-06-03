@@ -1,0 +1,34 @@
+version = 0.1
+
+[default]
+[default.build]
+[default.build.parameters]
+use_container = true
+
+[default.local_start_api]
+[default.local_start_api.parameters]
+host = "0.0.0.0"
+port = 3000
+
+[x86_64]
+[x86_64.build]
+[x86_64.build.parameters]
+use_container = true
+parameter_overrides = "Architecture=x86_64"
+
+[x86_64.local_start_api]
+[x86_64.local_start_api.parameters]
+host = "0.0.0.0"
+port = 3000
+
+[arm64]
+[arm64.build]
+[arm64.build.parameters]
+use_container = true
+parameter_overrides = "Architecture=arm64"
+build_image = "public.ecr.aws/sam/build-python3.12:latest-arm64"
+
+[arm64.local_start_api]
+[arm64.local_start_api.parameters]
+host = "0.0.0.0"
+port = 3000
