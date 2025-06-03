@@ -49,6 +49,7 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.12
       CodeUri: authorizer/
+      Architectures: [!Ref Architecture]
       Environment:
         Variables:
           MCP_AUTH_TOKEN: !Ref McpAuthToken
@@ -86,6 +87,7 @@ Resources:
         Command: ["app.lambda_handler"]
       Timeout: 60
       MemorySize: 1600
+      Architectures: [!Ref Architecture]
       Environment:
         Variables:
           MCP_SESSION_TABLE: !Ref McpSessionsTable
