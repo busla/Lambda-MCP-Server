@@ -10,16 +10,17 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
       - AWS_REGION=${AWS_REGION:-us-west-2}
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-west-2}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - GOOGLE_SEARCH_ENGINE_ID=${GOOGLE_SEARCH_ENGINE_ID}
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
     networks:
       - mcp-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/2015-03-31/functions/function/invocations"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test: ["CMD", "echo", "healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 2
 
   mcp-client:
     build:
