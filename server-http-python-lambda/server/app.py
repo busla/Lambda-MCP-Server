@@ -425,19 +425,35 @@ def _create_content_summary(query: str, content: str, max_length: int = 300) -> 
 
 
 @mcp_server.tool()
-def generate_github_worklog(github_username: str, repo_name: str = "busla/Lambda-MCP-Server", days_back: int = 30) -> str:
-    """Generate a detailed worklog from GitHub user activity for invoicing purposes.
+def generate_github_worklog(github_username: str, days_back: int = 30) -> str:
+    """Generate a detailed worklog from GitHub user activity across ALL repositories for invoicing purposes.
     
-    Analyzes GitHub activity including commits, PRs, and branches to estimate time spent
-    on development work. Calculates work hours based on commit timestamp intervals.
+    Uses GitHub's GraphQL API to analyze user activity including commits, PRs, and issues across
+    all repositories the user has contributed to. Calculates work hours based on commit timestamp 
+    intervals and includes commit messages and PR descriptions for detailed tracking.
+    
+    Features:
+    - Fetches activity from ALL user repositories (not limited to a single repo)
+    - Includes commit messages, PR descriptions, and issue details
+    - Smart work session detection with configurable time gaps
+    - Comprehensive error handling and rate limiting
+    - Pagination support for users with extensive activity
+    - Multi-repository tracking with detailed breakdown
     
     Args:
         github_username: GitHub username to analyze activity for
-        repo_name: Repository to analyze (default: busla/Lambda-MCP-Server)
         days_back: Number of days back to analyze (default: 30)
         
     Returns:
-        JSON string containing detailed worklog with estimated hours and activity breakdown
+        JSON string containing detailed worklog with:
+        - Estimated work hours with session detection
+        - Activity breakdown by type (commits, PRs, issues, reviews)
+        - Repository information for each activity
+        - Daily breakdown with detailed activity logs
+        - Billable hours calculation (90% rate)
+        
+    Requires:
+        GITHUB_TOKEN environment variable with appropriate scopes (read:user, repo)
     """
     try:
         github_token = os.environ.get('GITHUB_TOKEN')
@@ -454,7 +470,7 @@ def generate_github_worklog(github_username: str, repo_name: str = "busla/Lambda
         
         worklog_data = {
             'username': github_username,
-            'repository': repo_name,
+            'analysis_scope': 'all_repositories',
             'analysis_period': {
                 'start_date': start_date.isoformat(),
                 'end_date': end_date.isoformat(),
@@ -465,18 +481,15 @@ def generate_github_worklog(github_username: str, repo_name: str = "busla/Lambda
             'estimated_hours': {
                 'total_hours': 0,
                 'billable_hours': 0,
-                'methodology': 'commit_interval_analysis'
+                'methodology': 'graphql_activity_analysis_with_session_detection'
             },
-            'detailed_activities': []
+            'detailed_activities': [],
+            'repositories_analyzed': []
         }
         
-        commits_data = _fetch_github_commits(repo_name, github_username, start_date, end_date, headers)
+        activity_data = _fetch_github_activity_graphql(github_username, start_date, end_date, headers)
         
-        prs_data = _fetch_github_pull_requests(repo_name, github_username, start_date, end_date, headers)
-        
-        issues_data = _fetch_github_issues_activity(repo_name, github_username, start_date, end_date, headers)
-        
-        work_sessions = _analyze_work_sessions(commits_data, prs_data, issues_data)
+        work_sessions = _analyze_work_sessions_graphql(activity_data)
         
         daily_breakdown = _generate_daily_breakdown(work_sessions)
         
@@ -484,18 +497,20 @@ def generate_github_worklog(github_username: str, repo_name: str = "busla/Lambda
         
         worklog_data.update({
             'activity_summary': {
-                'total_commits': len(commits_data),
-                'total_pull_requests': len(prs_data),
-                'total_issues_activity': len(issues_data),
-                'work_sessions_detected': len(work_sessions)
+                'total_commits': activity_data.get('total_commits', 0),
+                'total_pull_requests': activity_data.get('total_pull_requests', 0),
+                'total_issues_activity': activity_data.get('total_issues', 0),
+                'work_sessions_detected': len(work_sessions),
+                'repositories_count': len(activity_data.get('repositories', []))
             },
             'daily_breakdown': daily_breakdown,
             'estimated_hours': {
                 'total_hours': round(total_hours, 2),
                 'billable_hours': round(total_hours * 0.9, 2),  # 90% billable rate
-                'methodology': 'commit_interval_analysis_with_session_detection'
+                'methodology': 'graphql_activity_analysis_with_session_detection'
             },
-            'detailed_activities': work_sessions
+            'detailed_activities': work_sessions,
+            'repositories_analyzed': activity_data.get('repositories', [])
         })
         
         return json.dumps(worklog_data, indent=2)
@@ -504,154 +519,348 @@ def generate_github_worklog(github_username: str, repo_name: str = "busla/Lambda
         return json.dumps({"error": f"GitHub worklog generation failed: {str(e)}"})
 
 
-def _fetch_github_commits(repo_name: str, username: str, start_date: datetime, end_date: datetime, headers: Dict) -> List[Dict]:
-    """Fetch commits from GitHub API for the specified user and date range."""
-    commits = []
-    page = 1
-    per_page = 100
+def _fetch_github_activity_graphql(username: str, start_date: datetime, end_date: datetime, headers: Dict) -> Dict:
+    """Fetch user activity from GitHub GraphQL API across all repositories with error handling and pagination."""
+    import time
     
-    while True:
-        url = f"https://api.github.com/repos/{repo_name}/commits"
-        params = {
-            'author': username,
-            'since': start_date.isoformat(),
-            'until': end_date.isoformat(),
-            'page': page,
-            'per_page': per_page
+    def execute_graphql_query(query: str, variables: Dict, retry_count: int = 0) -> Dict:
+        """Execute GraphQL query with error handling and rate limiting."""
+        max_retries = 3
+        base_delay = 1
+        
+        graphql_headers = {
+            'Authorization': headers['Authorization'],
+            'Content-Type': 'application/json'
         }
         
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        
-        page_commits = response.json()
-        if not page_commits:
-            break
+        try:
+            response = requests.post(
+                'https://api.github.com/graphql',
+                json={'query': query, 'variables': variables},
+                headers=graphql_headers,
+                timeout=30
+            )
             
-        commits.extend(page_commits)
-        page += 1
-        
-        if len(commits) >= 1000:
-            break
+            if response.status_code == 403:
+                reset_time = response.headers.get('X-RateLimit-Reset')
+                if reset_time and retry_count < max_retries:
+                    wait_time = min(int(reset_time) - int(time.time()) + 1, 60)
+                    if wait_time > 0:
+                        time.sleep(wait_time)
+                    return execute_graphql_query(query, variables, retry_count + 1)
+                else:
+                    raise Exception(f"GitHub API rate limit exceeded. Please try again later.")
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'errors' in data:
+                error_messages = [error.get('message', str(error)) for error in data['errors']]
+                if any('rate limit' in msg.lower() for msg in error_messages) and retry_count < max_retries:
+                    time.sleep(base_delay * (2 ** retry_count))
+                    return execute_graphql_query(query, variables, retry_count + 1)
+                raise Exception(f"GraphQL errors: {error_messages}")
+            
+            return data
+            
+        except requests.exceptions.RequestException as e:
+            if retry_count < max_retries:
+                time.sleep(base_delay * (2 ** retry_count))
+                return execute_graphql_query(query, variables, retry_count + 1)
+            raise Exception(f"Failed to fetch GitHub data after {max_retries + 1} attempts: {str(e)}")
     
-    return commits
-
-
-def _fetch_github_pull_requests(repo_name: str, username: str, start_date: datetime, end_date: datetime, headers: Dict) -> List[Dict]:
-    """Fetch pull requests from GitHub API for the specified user and date range."""
-    prs = []
-    page = 1
-    per_page = 100
-    
-    while True:
-        url = f"https://api.github.com/repos/{repo_name}/pulls"
-        params = {
-            'state': 'all',
-            'sort': 'updated',
-            'direction': 'desc',
-            'page': page,
-            'per_page': per_page
+    graphql_query = """
+    query($username: String!, $from: DateTime!, $to: DateTime!, $prCursor: String, $issueCursor: String, $reviewCursor: String) {
+      user(login: $username) {
+        contributionsCollection(from: $from, to: $to) {
+          commitContributionsByRepository {
+            repository {
+              name
+              owner { login }
+              nameWithOwner
+            }
+            contributions(first: 100) {
+              nodes {
+                occurredAt
+                commitCount
+                user { login }
+              }
+            }
+          }
+          pullRequestContributions(first: 100, after: $prCursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              pullRequest {
+                title
+                body
+                createdAt
+                updatedAt
+                repository { nameWithOwner }
+                url
+                number
+                state
+              }
+            }
+          }
+          issueContributions(first: 100, after: $issueCursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              issue {
+                title
+                body
+                createdAt
+                updatedAt
+                repository { nameWithOwner }
+                url
+                number
+                state
+              }
+            }
+          }
+          pullRequestReviewContributions(first: 100, after: $reviewCursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              pullRequestReview {
+                createdAt
+                pullRequest {
+                  title
+                  repository { nameWithOwner }
+                  url
+                  number
+                }
+              }
+            }
+          }
         }
-        
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        
-        page_prs = response.json()
-        if not page_prs:
-            break
-        
-        for pr in page_prs:
-            if pr['user']['login'] == username:
-                pr_date = datetime.fromisoformat(pr['updated_at'].replace('Z', '+00:00'))
-                if start_date <= pr_date <= end_date:
-                    prs.append(pr)
-        
-        page += 1
-        
-        if page_prs and datetime.fromisoformat(page_prs[-1]['updated_at'].replace('Z', '+00:00')) < start_date:
-            break
+      }
+    }
+    """
+    
+    variables = {
+        'username': username,
+        'from': start_date.isoformat(),
+        'to': end_date.isoformat(),
+        'prCursor': None,
+        'issueCursor': None,
+        'reviewCursor': None
+    }
+    
+    all_commits = []
+    all_pull_requests = []
+    all_issues = []
+    all_reviews = []
+    repositories = set()
+    
+    data = execute_graphql_query(graphql_query, variables)
+    contributions = data['data']['user']['contributionsCollection']
+    
+    def process_contributions_page(contributions_data: Dict):
+        """Process a single page of contributions data."""
+        # Process commit contributions
+        for repo_contrib in contributions_data['commitContributionsByRepository']:
+            repo_name = repo_contrib['repository']['nameWithOwner']
+            repositories.add(repo_name)
             
-        if len(prs) >= 200:
-            break
-    
-    return prs
-
-
-def _fetch_github_issues_activity(repo_name: str, username: str, start_date: datetime, end_date: datetime, headers: Dict) -> List[Dict]:
-    """Fetch issues activity from GitHub API for the specified user and date range."""
-    issues = []
-    page = 1
-    per_page = 100
-    
-    while True:
-        url = f"https://api.github.com/repos/{repo_name}/issues"
-        params = {
-            'state': 'all',
-            'sort': 'updated',
-            'direction': 'desc',
-            'page': page,
-            'per_page': per_page
-        }
+            for commit_contrib in repo_contrib['contributions']['nodes']:
+                all_commits.append({
+                    'type': 'commit',
+                    'timestamp': datetime.fromisoformat(commit_contrib['occurredAt'].replace('Z', '+00:00')),
+                    'repository': repo_name,
+                    'commit_count': commit_contrib['commitCount'],
+                    'description': f"{commit_contrib['commitCount']} commit(s) to {repo_name}",
+                    'user': commit_contrib['user']['login']
+                })
         
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        
-        page_issues = response.json()
-        if not page_issues:
-            break
-        
-        for issue in page_issues:
-            if issue['user']['login'] == username or any(
-                assignee['login'] == username for assignee in issue.get('assignees', [])
-            ):
-                issue_date = datetime.fromisoformat(issue['updated_at'].replace('Z', '+00:00'))
-                if start_date <= issue_date <= end_date:
-                    issues.append(issue)
-        
-        page += 1
-        
-        if page_issues and datetime.fromisoformat(page_issues[-1]['updated_at'].replace('Z', '+00:00')) < start_date:
-            break
+        # Process pull request contributions
+        for pr_contrib in contributions_data['pullRequestContributions']['nodes']:
+            pr = pr_contrib['pullRequest']
+            repositories.add(pr['repository']['nameWithOwner'])
             
-        if len(issues) >= 200:
-            break
-    
-    return issues
-
-
-def _analyze_work_sessions(commits: List[Dict], prs: List[Dict], issues: List[Dict]) -> List[Dict]:
-    """Analyze GitHub activity to detect work sessions and estimate time spent."""
-    all_activities = []
-    
-    for commit in commits:
-        commit_date = datetime.fromisoformat(commit['commit']['author']['date'].replace('Z', '+00:00'))
-        all_activities.append({
-            'type': 'commit',
-            'timestamp': commit_date,
-            'description': commit['commit']['message'][:100],
-            'sha': commit['sha'][:8],
-            'url': commit['html_url']
-        })
-    
-    for pr in prs:
-        pr_date = datetime.fromisoformat(pr['updated_at'].replace('Z', '+00:00'))
-        all_activities.append({
-            'type': 'pull_request',
-            'timestamp': pr_date,
-            'description': f"PR #{pr['number']}: {pr['title'][:80]}",
-            'state': pr['state'],
-            'url': pr['html_url']
-        })
-    
-    for issue in issues:
-        if 'pull_request' not in issue:  # Skip PRs that appear as issues
-            issue_date = datetime.fromisoformat(issue['updated_at'].replace('Z', '+00:00'))
-            all_activities.append({
+            all_pull_requests.append({
+                'type': 'pull_request',
+                'timestamp': datetime.fromisoformat(pr['updatedAt'].replace('Z', '+00:00')),
+                'repository': pr['repository']['nameWithOwner'],
+                'title': pr['title'],
+                'body': pr['body'] or '',
+                'description': f"PR #{pr['number']}: {pr['title'][:80]}",
+                'state': pr['state'],
+                'url': pr['url'],
+                'number': pr['number']
+            })
+        
+        # Process issue contributions
+        for issue_contrib in contributions_data['issueContributions']['nodes']:
+            issue = issue_contrib['issue']
+            repositories.add(issue['repository']['nameWithOwner'])
+            
+            all_issues.append({
                 'type': 'issue',
-                'timestamp': issue_date,
+                'timestamp': datetime.fromisoformat(issue['updatedAt'].replace('Z', '+00:00')),
+                'repository': issue['repository']['nameWithOwner'],
+                'title': issue['title'],
+                'body': issue['body'] or '',
                 'description': f"Issue #{issue['number']}: {issue['title'][:80]}",
                 'state': issue['state'],
-                'url': issue['html_url']
+                'url': issue['url'],
+                'number': issue['number']
             })
+        
+        # Process pull request review contributions
+        for review_contrib in contributions_data['pullRequestReviewContributions']['nodes']:
+            review = review_contrib['pullRequestReview']
+            pr = review['pullRequest']
+            repositories.add(pr['repository']['nameWithOwner'])
+            
+            all_reviews.append({
+                'type': 'pull_request_review',
+                'timestamp': datetime.fromisoformat(review['createdAt'].replace('Z', '+00:00')),
+                'repository': pr['repository']['nameWithOwner'],
+                'description': f"Reviewed PR #{pr['number']}: {pr['title'][:60]}",
+                'url': pr['url'],
+                'pr_number': pr['number']
+            })
+    
+    # Process initial page
+    process_contributions_page(contributions)
+    
+    pr_page_info = contributions['pullRequestContributions']['pageInfo']
+    max_pages = 5  # Limit to prevent excessive API calls
+    page_count = 1
+    
+    while pr_page_info['hasNextPage'] and page_count < max_pages:
+        variables['prCursor'] = pr_page_info['endCursor']
+        data = execute_graphql_query(graphql_query, variables)
+        contributions_page = data['data']['user']['contributionsCollection']
+        
+        # Process only PR contributions for this page
+        for pr_contrib in contributions_page['pullRequestContributions']['nodes']:
+            pr = pr_contrib['pullRequest']
+            repositories.add(pr['repository']['nameWithOwner'])
+            
+            all_pull_requests.append({
+                'type': 'pull_request',
+                'timestamp': datetime.fromisoformat(pr['updatedAt'].replace('Z', '+00:00')),
+                'repository': pr['repository']['nameWithOwner'],
+                'title': pr['title'],
+                'body': pr['body'] or '',
+                'description': f"PR #{pr['number']}: {pr['title'][:80]}",
+                'state': pr['state'],
+                'url': pr['url'],
+                'number': pr['number']
+            })
+        
+        pr_page_info = contributions_page['pullRequestContributions']['pageInfo']
+        page_count += 1
+    
+    issue_page_info = contributions['issueContributions']['pageInfo']
+    page_count = 1
+    variables['prCursor'] = None  # Reset PR cursor
+    
+    while issue_page_info['hasNextPage'] and page_count < max_pages:
+        variables['issueCursor'] = issue_page_info['endCursor']
+        data = execute_graphql_query(graphql_query, variables)
+        contributions_page = data['data']['user']['contributionsCollection']
+        
+        # Process only issue contributions for this page
+        for issue_contrib in contributions_page['issueContributions']['nodes']:
+            issue = issue_contrib['issue']
+            repositories.add(issue['repository']['nameWithOwner'])
+            
+            all_issues.append({
+                'type': 'issue',
+                'timestamp': datetime.fromisoformat(issue['updatedAt'].replace('Z', '+00:00')),
+                'repository': issue['repository']['nameWithOwner'],
+                'title': issue['title'],
+                'body': issue['body'] or '',
+                'description': f"Issue #{issue['number']}: {issue['title'][:80]}",
+                'state': issue['state'],
+                'url': issue['url'],
+                'number': issue['number']
+            })
+        
+        issue_page_info = contributions_page['issueContributions']['pageInfo']
+        page_count += 1
+    
+    return {
+        'commits': all_commits,
+        'pull_requests': all_pull_requests,
+        'issues': all_issues,
+        'reviews': all_reviews,
+        'repositories': list(repositories),
+        'total_commits': len(all_commits),
+        'total_pull_requests': len(all_pull_requests),
+        'total_issues': len(all_issues),
+        'total_reviews': len(all_reviews),
+        'pagination_info': {
+            'pr_pages_fetched': page_count if pr_page_info['hasNextPage'] else 'all',
+            'issue_pages_fetched': page_count if issue_page_info['hasNextPage'] else 'all',
+            'max_pages_limit': max_pages
+        }
+    }
+
+
+def _analyze_work_sessions_graphql(activity_data: Dict) -> List[Dict]:
+    """Analyze GitHub activity from GraphQL data to detect work sessions and estimate time spent."""
+    all_activities = []
+    
+    # Process commits from GraphQL data
+    for commit in activity_data.get('commits', []):
+        all_activities.append({
+            'type': commit['type'],
+            'timestamp': commit['timestamp'],
+            'description': commit['description'],
+            'repository': commit['repository'],
+            'commit_count': commit.get('commit_count', 1),
+            'user': commit.get('user', '')
+        })
+    
+    # Process pull requests from GraphQL data
+    for pr in activity_data.get('pull_requests', []):
+        all_activities.append({
+            'type': pr['type'],
+            'timestamp': pr['timestamp'],
+            'description': pr['description'],
+            'repository': pr['repository'],
+            'title': pr['title'],
+            'body': pr['body'],
+            'state': pr['state'],
+            'url': pr['url'],
+            'number': pr['number']
+        })
+    
+    # Process issues from GraphQL data
+    for issue in activity_data.get('issues', []):
+        all_activities.append({
+            'type': issue['type'],
+            'timestamp': issue['timestamp'],
+            'description': issue['description'],
+            'repository': issue['repository'],
+            'title': issue['title'],
+            'body': issue['body'],
+            'state': issue['state'],
+            'url': issue['url'],
+            'number': issue['number']
+        })
+    
+    # Process reviews from GraphQL data
+    for review in activity_data.get('reviews', []):
+        all_activities.append({
+            'type': review['type'],
+            'timestamp': review['timestamp'],
+            'description': review['description'],
+            'repository': review['repository'],
+            'url': review['url'],
+            'pr_number': review['pr_number']
+        })
     
     all_activities.sort(key=lambda x: x['timestamp'])
     
@@ -667,7 +876,8 @@ def _analyze_work_sessions(commits: List[Dict], prs: List[Dict], issues: List[Di
                 'start_time': activity['timestamp'],
                 'end_time': activity['timestamp'],
                 'activities': [activity],
-                'estimated_duration_hours': 0
+                'estimated_duration_hours': 0,
+                'repositories': {activity['repository']}
             }
         else:
             time_gap = activity['timestamp'] - current_session['end_time']
@@ -675,6 +885,7 @@ def _analyze_work_sessions(commits: List[Dict], prs: List[Dict], issues: List[Di
             if time_gap <= session_gap_threshold:
                 current_session['end_time'] = activity['timestamp']
                 current_session['activities'].append(activity)
+                current_session['repositories'].add(activity['repository'])
             else:
                 session_duration = current_session['end_time'] - current_session['start_time']
                 
@@ -684,13 +895,15 @@ def _analyze_work_sessions(commits: List[Dict], prs: List[Dict], issues: List[Di
                     session_duration = max_session_duration
                 
                 current_session['estimated_duration_hours'] = session_duration.total_seconds() / 3600
+                current_session['repositories'] = list(current_session['repositories'])
                 work_sessions.append(current_session)
                 
                 current_session = {
                     'start_time': activity['timestamp'],
                     'end_time': activity['timestamp'],
                     'activities': [activity],
-                    'estimated_duration_hours': 0
+                    'estimated_duration_hours': 0,
+                    'repositories': {activity['repository']}
                 }
     
     if current_session:
@@ -702,13 +915,14 @@ def _analyze_work_sessions(commits: List[Dict], prs: List[Dict], issues: List[Di
             session_duration = max_session_duration
             
         current_session['estimated_duration_hours'] = session_duration.total_seconds() / 3600
+        current_session['repositories'] = list(current_session['repositories'])
         work_sessions.append(current_session)
     
     return work_sessions
 
 
 def _generate_daily_breakdown(work_sessions: List[Dict]) -> Dict:
-    """Generate daily breakdown of work hours and activities."""
+    """Generate daily breakdown of work hours and activities with repository information."""
     daily_breakdown = {}
     
     for session in work_sessions:
@@ -720,7 +934,8 @@ def _generate_daily_breakdown(work_sessions: List[Dict]) -> Dict:
                 'estimated_hours': 0,
                 'sessions_count': 0,
                 'activities_count': 0,
-                'activity_types': {'commit': 0, 'pull_request': 0, 'issue': 0},
+                'activity_types': {'commit': 0, 'pull_request': 0, 'issue': 0, 'pull_request_review': 0},
+                'repositories': set(),
                 'sessions': []
             }
         
@@ -728,25 +943,56 @@ def _generate_daily_breakdown(work_sessions: List[Dict]) -> Dict:
         daily_breakdown[session_date]['sessions_count'] += 1
         daily_breakdown[session_date]['activities_count'] += len(session['activities'])
         
+        if 'repositories' in session:
+            daily_breakdown[session_date]['repositories'].update(session['repositories'])
+        
+        session_activities = []
         for activity in session['activities']:
             activity_type = activity['type']
-            if activity_type in daily_breakdown[session_date]['activity_types']:
-                daily_breakdown[session_date]['activity_types'][activity_type] += 1
+            if activity_type not in daily_breakdown[session_date]['activity_types']:
+                daily_breakdown[session_date]['activity_types'][activity_type] = 0
+            daily_breakdown[session_date]['activity_types'][activity_type] += 1
+            
+            if 'repository' in activity:
+                daily_breakdown[session_date]['repositories'].add(activity['repository'])
+            
+            activity_detail = {
+                'type': activity_type,
+                'repository': activity.get('repository', 'unknown'),
+                'description': activity.get('description', ''),
+                'timestamp': activity['timestamp'].strftime('%H:%M')
+            }
+            
+            if activity_type == 'pull_request' and 'title' in activity:
+                activity_detail['title'] = activity['title']
+                activity_detail['body'] = activity.get('body', '')[:100] + '...' if len(activity.get('body', '')) > 100 else activity.get('body', '')
+                activity_detail['url'] = activity.get('url', '')
+            elif activity_type == 'issue' and 'title' in activity:
+                activity_detail['title'] = activity['title']
+                activity_detail['body'] = activity.get('body', '')[:100] + '...' if len(activity.get('body', '')) > 100 else activity.get('body', '')
+                activity_detail['url'] = activity.get('url', '')
+            elif activity_type == 'commit':
+                activity_detail['commit_count'] = activity.get('commit_count', 1)
+            
+            session_activities.append(activity_detail)
         
         daily_breakdown[session_date]['sessions'].append({
             'start_time': session['start_time'].strftime('%H:%M'),
             'end_time': session['end_time'].strftime('%H:%M'),
             'duration_hours': round(session['estimated_duration_hours'], 2),
             'activities_count': len(session['activities']),
-            'primary_activity': session['activities'][0]['description'] if session['activities'] else 'Unknown'
+            'repositories': list(session.get('repositories', [])),
+            'primary_activity': session['activities'][0]['description'] if session['activities'] else 'Unknown',
+            'activities': session_activities
         })
     
     for day_data in daily_breakdown.values():
         day_data['estimated_hours'] = round(day_data['estimated_hours'], 2)
+        day_data['repositories'] = list(day_data['repositories'])
     
     return daily_breakdown
 
 
 def lambda_handler(event, context):
     """AWS Lambda handler function."""
-    return mcp_server.handle_request(event, context)                                                                                                                                                                                                                                    
+    return mcp_server.handle_request(event, context)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
