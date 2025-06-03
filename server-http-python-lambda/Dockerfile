@@ -1,3 +1,4 @@
+ARG LAMBDA_ARCHITECTURE=x86_64
 FROM public.ecr.aws/lambda/python:3.12
 
 # Copy requirements and install Python dependencies

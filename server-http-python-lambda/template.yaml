@@ -15,12 +15,19 @@ Parameters:
     Type: String
     NoEcho: true
     Description: "Google Custom Search Engine ID"
+  Architecture:
+    Type: String
+    Default: x86_64
+    AllowedValues:
+      - x86_64
+      - arm64
+    Description: "Lambda function architecture"
 
 Globals:
   Function:
     Timeout: 60
     MemorySize: 1600
-    Architectures: [x86_64]
+    Architectures: [!Ref Architecture]
 
 Resources:
   McpApi:
