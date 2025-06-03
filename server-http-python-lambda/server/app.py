@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 import json
 import re
 from typing import List, Dict, Tuple
+from datetime import timedelta
 SKLEARN_AVAILABLE = False
 # Get session table name from environment variable
 session_table = os.environ.get('MCP_SESSION_TABLE', 'mcp_sessions')
@@ -423,6 +424,329 @@ def _create_content_summary(query: str, content: str, max_length: int = 300) -> 
         return 'Summary generation failed.'
 
 
+@mcp_server.tool()
+def generate_github_worklog(github_username: str, repo_name: str = "busla/Lambda-MCP-Server", days_back: int = 30) -> str:
+    """Generate a detailed worklog from GitHub user activity for invoicing purposes.
+    
+    Analyzes GitHub activity including commits, PRs, and branches to estimate time spent
+    on development work. Calculates work hours based on commit timestamp intervals.
+    
+    Args:
+        github_username: GitHub username to analyze activity for
+        repo_name: Repository to analyze (default: busla/Lambda-MCP-Server)
+        days_back: Number of days back to analyze (default: 30)
+        
+    Returns:
+        JSON string containing detailed worklog with estimated hours and activity breakdown
+    """
+    try:
+        github_token = os.environ.get('GITHUB_TOKEN')
+        if not github_token:
+            return json.dumps({"error": "GitHub token not configured. Set GITHUB_TOKEN environment variable."})
+        
+        headers = {
+            'Authorization': f'token {github_token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=days_back)
+        
+        worklog_data = {
+            'username': github_username,
+            'repository': repo_name,
+            'analysis_period': {
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'days_analyzed': days_back
+            },
+            'activity_summary': {},
+            'daily_breakdown': {},
+            'estimated_hours': {
+                'total_hours': 0,
+                'billable_hours': 0,
+                'methodology': 'commit_interval_analysis'
+            },
+            'detailed_activities': []
+        }
+        
+        commits_data = _fetch_github_commits(repo_name, github_username, start_date, end_date, headers)
+        
+        prs_data = _fetch_github_pull_requests(repo_name, github_username, start_date, end_date, headers)
+        
+        issues_data = _fetch_github_issues_activity(repo_name, github_username, start_date, end_date, headers)
+        
+        work_sessions = _analyze_work_sessions(commits_data, prs_data, issues_data)
+        
+        daily_breakdown = _generate_daily_breakdown(work_sessions)
+        
+        total_hours = sum(day_data['estimated_hours'] for day_data in daily_breakdown.values())
+        
+        worklog_data.update({
+            'activity_summary': {
+                'total_commits': len(commits_data),
+                'total_pull_requests': len(prs_data),
+                'total_issues_activity': len(issues_data),
+                'work_sessions_detected': len(work_sessions)
+            },
+            'daily_breakdown': daily_breakdown,
+            'estimated_hours': {
+                'total_hours': round(total_hours, 2),
+                'billable_hours': round(total_hours * 0.9, 2),  # 90% billable rate
+                'methodology': 'commit_interval_analysis_with_session_detection'
+            },
+            'detailed_activities': work_sessions
+        })
+        
+        return json.dumps(worklog_data, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"error": f"GitHub worklog generation failed: {str(e)}"})
+
+
+def _fetch_github_commits(repo_name: str, username: str, start_date: datetime, end_date: datetime, headers: Dict) -> List[Dict]:
+    """Fetch commits from GitHub API for the specified user and date range."""
+    commits = []
+    page = 1
+    per_page = 100
+    
+    while True:
+        url = f"https://api.github.com/repos/{repo_name}/commits"
+        params = {
+            'author': username,
+            'since': start_date.isoformat(),
+            'until': end_date.isoformat(),
+            'page': page,
+            'per_page': per_page
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        
+        page_commits = response.json()
+        if not page_commits:
+            break
+            
+        commits.extend(page_commits)
+        page += 1
+        
+        if len(commits) >= 1000:
+            break
+    
+    return commits
+
+
+def _fetch_github_pull_requests(repo_name: str, username: str, start_date: datetime, end_date: datetime, headers: Dict) -> List[Dict]:
+    """Fetch pull requests from GitHub API for the specified user and date range."""
+    prs = []
+    page = 1
+    per_page = 100
+    
+    while True:
+        url = f"https://api.github.com/repos/{repo_name}/pulls"
+        params = {
+            'state': 'all',
+            'sort': 'updated',
+            'direction': 'desc',
+            'page': page,
+            'per_page': per_page
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        
+        page_prs = response.json()
+        if not page_prs:
+            break
+        
+        for pr in page_prs:
+            if pr['user']['login'] == username:
+                pr_date = datetime.fromisoformat(pr['updated_at'].replace('Z', '+00:00'))
+                if start_date <= pr_date <= end_date:
+                    prs.append(pr)
+        
+        page += 1
+        
+        if page_prs and datetime.fromisoformat(page_prs[-1]['updated_at'].replace('Z', '+00:00')) < start_date:
+            break
+            
+        if len(prs) >= 200:
+            break
+    
+    return prs
+
+
+def _fetch_github_issues_activity(repo_name: str, username: str, start_date: datetime, end_date: datetime, headers: Dict) -> List[Dict]:
+    """Fetch issues activity from GitHub API for the specified user and date range."""
+    issues = []
+    page = 1
+    per_page = 100
+    
+    while True:
+        url = f"https://api.github.com/repos/{repo_name}/issues"
+        params = {
+            'state': 'all',
+            'sort': 'updated',
+            'direction': 'desc',
+            'page': page,
+            'per_page': per_page
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        
+        page_issues = response.json()
+        if not page_issues:
+            break
+        
+        for issue in page_issues:
+            if issue['user']['login'] == username or any(
+                assignee['login'] == username for assignee in issue.get('assignees', [])
+            ):
+                issue_date = datetime.fromisoformat(issue['updated_at'].replace('Z', '+00:00'))
+                if start_date <= issue_date <= end_date:
+                    issues.append(issue)
+        
+        page += 1
+        
+        if page_issues and datetime.fromisoformat(page_issues[-1]['updated_at'].replace('Z', '+00:00')) < start_date:
+            break
+            
+        if len(issues) >= 200:
+            break
+    
+    return issues
+
+
+def _analyze_work_sessions(commits: List[Dict], prs: List[Dict], issues: List[Dict]) -> List[Dict]:
+    """Analyze GitHub activity to detect work sessions and estimate time spent."""
+    all_activities = []
+    
+    for commit in commits:
+        commit_date = datetime.fromisoformat(commit['commit']['author']['date'].replace('Z', '+00:00'))
+        all_activities.append({
+            'type': 'commit',
+            'timestamp': commit_date,
+            'description': commit['commit']['message'][:100],
+            'sha': commit['sha'][:8],
+            'url': commit['html_url']
+        })
+    
+    for pr in prs:
+        pr_date = datetime.fromisoformat(pr['updated_at'].replace('Z', '+00:00'))
+        all_activities.append({
+            'type': 'pull_request',
+            'timestamp': pr_date,
+            'description': f"PR #{pr['number']}: {pr['title'][:80]}",
+            'state': pr['state'],
+            'url': pr['html_url']
+        })
+    
+    for issue in issues:
+        if 'pull_request' not in issue:  # Skip PRs that appear as issues
+            issue_date = datetime.fromisoformat(issue['updated_at'].replace('Z', '+00:00'))
+            all_activities.append({
+                'type': 'issue',
+                'timestamp': issue_date,
+                'description': f"Issue #{issue['number']}: {issue['title'][:80]}",
+                'state': issue['state'],
+                'url': issue['html_url']
+            })
+    
+    all_activities.sort(key=lambda x: x['timestamp'])
+    
+    work_sessions = []
+    current_session = None
+    session_gap_threshold = timedelta(hours=2)  # 2 hours gap indicates new session
+    min_session_duration = timedelta(minutes=15)  # Minimum 15 minutes per session
+    max_session_duration = timedelta(hours=8)  # Maximum 8 hours per session
+    
+    for activity in all_activities:
+        if current_session is None:
+            current_session = {
+                'start_time': activity['timestamp'],
+                'end_time': activity['timestamp'],
+                'activities': [activity],
+                'estimated_duration_hours': 0
+            }
+        else:
+            time_gap = activity['timestamp'] - current_session['end_time']
+            
+            if time_gap <= session_gap_threshold:
+                current_session['end_time'] = activity['timestamp']
+                current_session['activities'].append(activity)
+            else:
+                session_duration = current_session['end_time'] - current_session['start_time']
+                
+                if session_duration < min_session_duration:
+                    session_duration = min_session_duration
+                elif session_duration > max_session_duration:
+                    session_duration = max_session_duration
+                
+                current_session['estimated_duration_hours'] = session_duration.total_seconds() / 3600
+                work_sessions.append(current_session)
+                
+                current_session = {
+                    'start_time': activity['timestamp'],
+                    'end_time': activity['timestamp'],
+                    'activities': [activity],
+                    'estimated_duration_hours': 0
+                }
+    
+    if current_session:
+        session_duration = current_session['end_time'] - current_session['start_time']
+        
+        if session_duration < min_session_duration:
+            session_duration = min_session_duration
+        elif session_duration > max_session_duration:
+            session_duration = max_session_duration
+            
+        current_session['estimated_duration_hours'] = session_duration.total_seconds() / 3600
+        work_sessions.append(current_session)
+    
+    return work_sessions
+
+
+def _generate_daily_breakdown(work_sessions: List[Dict]) -> Dict:
+    """Generate daily breakdown of work hours and activities."""
+    daily_breakdown = {}
+    
+    for session in work_sessions:
+        session_date = session['start_time'].date().isoformat()
+        
+        if session_date not in daily_breakdown:
+            daily_breakdown[session_date] = {
+                'date': session_date,
+                'estimated_hours': 0,
+                'sessions_count': 0,
+                'activities_count': 0,
+                'activity_types': {'commit': 0, 'pull_request': 0, 'issue': 0},
+                'sessions': []
+            }
+        
+        daily_breakdown[session_date]['estimated_hours'] += session['estimated_duration_hours']
+        daily_breakdown[session_date]['sessions_count'] += 1
+        daily_breakdown[session_date]['activities_count'] += len(session['activities'])
+        
+        for activity in session['activities']:
+            activity_type = activity['type']
+            if activity_type in daily_breakdown[session_date]['activity_types']:
+                daily_breakdown[session_date]['activity_types'][activity_type] += 1
+        
+        daily_breakdown[session_date]['sessions'].append({
+            'start_time': session['start_time'].strftime('%H:%M'),
+            'end_time': session['end_time'].strftime('%H:%M'),
+            'duration_hours': round(session['estimated_duration_hours'], 2),
+            'activities_count': len(session['activities']),
+            'primary_activity': session['activities'][0]['description'] if session['activities'] else 'Unknown'
+        })
+    
+    for day_data in daily_breakdown.values():
+        day_data['estimated_hours'] = round(day_data['estimated_hours'], 2)
+    
+    return daily_breakdown
+
+
 def lambda_handler(event, context):
     """AWS Lambda handler function."""
-    return mcp_server.handle_request(event, context)                                                                            
+    return mcp_server.handle_request(event, context)                                                                                                                                                                                                                                    
