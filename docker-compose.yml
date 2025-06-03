@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  mcp-server:
+    build:
+      context: ./server-http-python-lambda
+      dockerfile: Dockerfile
+    ports:
+      - "3000:8080"
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      - AWS_REGION=${AWS_REGION:-us-west-2}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_SEARCH_ENGINE_ID=${GOOGLE_SEARCH_ENGINE_ID}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/2015-03-31/functions/function/invocations"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mcp-client:
+    build:
+      context: ./client-http-typescript-docker/client
+      dockerfile: Dockerfile
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      - AWS_REGION=${AWS_REGION:-us-west-2}
+      - NODE_ENV=development
+      - MCP_URL=http://mcp-server:8080/2015-03-31/functions/function/invocations
+      - MCP_TOKEN=${MCP_AUTH_TOKEN}
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    networks:
+      - mcp-network
+    stdin_open: true
+    tty: true
+
+networks:
+  mcp-network:
+    driver: bridge
