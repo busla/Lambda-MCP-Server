@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: MCP StreamableHttp server as Lambda container
+
+Parameters:
+  Architecture:
+    Type: String
+    Default: x86_64
+    AllowedValues:
+      - x86_64
+      - arm64
+    Description: Lambda function architecture
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Architectures:
+      - !Ref Architecture
+
+Resources:
+  McpApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      EndpointConfiguration:
+        Type: REGIONAL
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  McpServerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - app.main.handler
+      Events:
+        McpApiProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref McpApi
+            Path: /{proxy+}
+            Method: ANY
+        McpApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref McpApi
+            Path: /
+            Method: ANY
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+    Metadata:
+      DockerTag: !Sub "${Architecture}-latest"
+      DockerContext: .
+      Dockerfile: Dockerfile
+      DockerBuildArgs:
+        ARCHITECTURE: !Ref Architecture
+
+  McpEcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${AWS::StackName}-mcp-server"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+Outputs:
+  McpApiUrl:
+    Description: API Gateway endpoint URL for MCP server
+    Value: !Sub "https://${McpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
+    Export:
+      Name: !Sub "${AWS::StackName}-McpApiUrl"
+  
+  McpServerFunctionArn:
+    Description: MCP Server Lambda Function ARN
+    Value: !GetAtt McpServerFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-McpServerFunctionArn"
+
+  EcrRepositoryUri:
+    Description: ECR Repository URI
+    Value: !GetAtt McpEcrRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-EcrRepositoryUri"

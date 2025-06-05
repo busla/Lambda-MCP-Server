@@ -1,0 +1,77 @@
+version = 0.1
+
+[default]
+[default.global]
+[default.global.parameters]
+stack_name = "mcp-lambda-container"
+region = "eu-central-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+image_repositories = []
+
+[default.build]
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy]
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+image_repositories = []
+
+[default.package]
+[default.package.parameters]
+resolve_s3 = true
+
+[default.sync]
+[default.sync.parameters]
+watch = true
+
+[default.local_start_api]
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+
+[default.local_start_lambda]
+[default.local_start_lambda.parameters]
+warm_containers = "EAGER"
+
+# Architecture-specific configurations
+[x86_64]
+[x86_64.global]
+[x86_64.global.parameters]
+stack_name = "mcp-lambda-container-x86"
+region = "eu-central-1"
+parameter_overrides = "Architecture=x86_64"
+
+[x86_64.build]
+[x86_64.build.parameters]
+cached = true
+parallel = true
+
+[x86_64.deploy]
+[x86_64.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+parameter_overrides = "Architecture=x86_64"
+
+[arm64]
+[arm64.global]
+[arm64.global.parameters]
+stack_name = "mcp-lambda-container-arm64"
+region = "eu-central-1"
+parameter_overrides = "Architecture=arm64"
+
+[arm64.build]
+[arm64.build.parameters]
+cached = true
+parallel = true
+
+[arm64.deploy]
+[arm64.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+parameter_overrides = "Architecture=arm64"
