@@ -91,11 +91,11 @@ def create_app():
     async def handle_streamable_http(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
-        event_store = InMemoryEventStore()
         session_manager = StreamableHTTPSessionManager(
             app=app,
-            event_store=event_store,  # Enable resumability
+            event_store=None,  # No event store in stateless mode
             json_response=True,  # Use StreamableHttp protocol, not SSE
+            stateless=True,  # Create new transport for each request
         )
         
         async with session_manager.run():
