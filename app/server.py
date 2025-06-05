@@ -88,35 +88,24 @@ def create_app():
             )
         ]
 
-    event_store = InMemoryEventStore()
-
-    session_manager = StreamableHTTPSessionManager(
-        app=app,
-        event_store=event_store,  # Enable resumability
-        json_response=False,
-    )
-
     async def handle_streamable_http(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
-        await session_manager.handle_request(scope, receive, send)
-
-    @contextlib.asynccontextmanager
-    async def lifespan(app: Starlette) -> AsyncIterator[None]:
-        """Context manager for managing session manager lifecycle."""
+        event_store = InMemoryEventStore()
+        session_manager = StreamableHTTPSessionManager(
+            app=app,
+            event_store=event_store,  # Enable resumability
+            json_response=False,
+        )
+        
         async with session_manager.run():
-            logger.info("Application started with StreamableHTTP session manager!")
-            try:
-                yield
-            finally:
-                logger.info("Application shutting down...")
+            await session_manager.handle_request(scope, receive, send)
 
     starlette_app = Starlette(
         debug=True,
         routes=[
             Mount("/mcp", app=handle_streamable_http),
         ],
-        lifespan=lifespan,
     )
 
     return starlette_app
