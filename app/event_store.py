@@ -1,42 +1,97 @@
-import uuid
-from typing import Any, Dict, List, Optional
+"""
+In-memory event store for demonstrating resumability functionality.
+
+This is a simple implementation intended for examples and testing,
+not for production use where a persistent storage solution would be more appropriate.
+"""
+
+import logging
+from collections import deque
+from dataclasses import dataclass
+from uuid import uuid4
+
+from mcp.server.streamable_http import (
+    EventCallback,
+    EventId,
+    EventMessage,
+    EventStore,
+    StreamId,
+)
+from mcp.types import JSONRPCMessage
+
+logger = logging.getLogger(__name__)
 
 
-class InMemoryEventStore:
-    """Simple in-memory event store for demonstration purposes."""
-    
-    def __init__(self):
-        self._streams: Dict[str, Dict[str, Any]] = {}
-    
-    def create_stream(self, name: str, initial_data: Dict[str, Any]) -> str:
-        """Create a new stream and return its ID."""
-        stream_id = str(uuid.uuid4())
-        self._streams[stream_id] = {
-            "name": name,
-            "data": initial_data,
-            "created_at": "now",  # In a real implementation, use proper timestamps
-        }
+@dataclass
+class EventEntry:
+    """
+    Represents an event entry in the event store.
+    """
+
+    event_id: EventId
+    stream_id: StreamId
+    message: JSONRPCMessage
+
+
+class InMemoryEventStore(EventStore):
+    """
+    Simple in-memory implementation of the EventStore interface for resumability.
+    This is primarily intended for examples and testing, not for production use
+    where a persistent storage solution would be more appropriate.
+
+    This implementation keeps only the last N events per stream for memory efficiency.
+    """
+
+    def __init__(self, max_events_per_stream: int = 100):
+        """Initialize the event store.
+
+        Args:
+            max_events_per_stream: Maximum number of events to keep per stream
+        """
+        self.max_events_per_stream = max_events_per_stream
+        self.streams: dict[StreamId, deque[EventEntry]] = {}
+        self.event_index: dict[EventId, EventEntry] = {}
+
+    async def store_event(
+        self, stream_id: StreamId, message: JSONRPCMessage
+    ) -> EventId:
+        """Stores an event with a generated event ID."""
+        event_id = str(uuid4())
+        event_entry = EventEntry(
+            event_id=event_id, stream_id=stream_id, message=message
+        )
+
+        if stream_id not in self.streams:
+            self.streams[stream_id] = deque(maxlen=self.max_events_per_stream)
+
+        if len(self.streams[stream_id]) == self.max_events_per_stream:
+            oldest_event = self.streams[stream_id][0]
+            self.event_index.pop(oldest_event.event_id, None)
+
+        self.streams[stream_id].append(event_entry)
+        self.event_index[event_id] = event_entry
+
+        return event_id
+
+    async def replay_events_after(
+        self,
+        last_event_id: EventId,
+        send_callback: EventCallback,
+    ) -> StreamId | None:
+        """Replays events that occurred after the specified event ID."""
+        if last_event_id not in self.event_index:
+            logger.warning(f"Event ID {last_event_id} not found in store")
+            return None
+
+        last_event = self.event_index[last_event_id]
+        stream_id = last_event.stream_id
+        stream_events = self.streams.get(last_event.stream_id, deque())
+
+        found_last = False
+        for event in stream_events:
+            if found_last:
+                await send_callback(EventMessage(event.message, event.event_id))
+            elif event.event_id == last_event_id:
+                found_last = True
+
         return stream_id
-    
-    def get_stream_data(self, stream_id: str) -> Optional[Dict[str, Any]]:
-        """Get stream data by ID."""
-        stream = self._streams.get(stream_id)
-        return stream["data"] if stream else None
-    
-    def update_stream_data(self, stream_id: str, data: Dict[str, Any]) -> bool:
-        """Update stream data."""
-        if stream_id in self._streams:
-            self._streams[stream_id]["data"].update(data)
-            return True
-        return False
-    
-    def list_streams(self) -> List[str]:
-        """List all stream IDs."""
-        return list(self._streams.keys())
-    
-    def delete_stream(self, stream_id: str) -> bool:
-        """Delete a stream."""
-        if stream_id in self._streams:
-            del self._streams[stream_id]
-            return True
-        return False

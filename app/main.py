@@ -3,14 +3,14 @@ from typing import Any, Dict
 
 from mangum import Mangum
 
-from .server import create_app
+from app.server import create_app
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 app = create_app()
 
-handler = Mangum(app, lifespan="off")
+handler = Mangum(app, lifespan="on")
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:

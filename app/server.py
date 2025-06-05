@@ -1,66 +1,122 @@
+import contextlib
+import logging
+from collections.abc import AsyncIterator
 from typing import Any, Dict, List
 
-from fastmcp import FastMCP
-from pydantic import BaseModel
+import anyio
+import mcp.types as types
+from mcp.server.lowlevel import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from pydantic import AnyUrl
+from starlette.applications import Starlette
+from starlette.routing import Mount
+from starlette.types import Receive, Scope, Send
 
 from .event_store import InMemoryEventStore
 
-mcp = FastMCP("MCP StreamableHttp Server")
-
-event_store = InMemoryEventStore()
-
-
-class NotificationRequest(BaseModel):
-    interval: float
-    count: int
-    caller: str
-
-
-@mcp.tool()
-def start_notification_stream(
-    interval: float, count: int, caller: str
-) -> Dict[str, Any]:
-    """Start a notification stream with specified interval and count."""
-    request = NotificationRequest(interval=interval, count=count, caller=caller)
-    
-    stream_id = event_store.create_stream(
-        f"notifications-{caller}",
-        {
-            "interval": request.interval,
-            "count": request.count,
-            "caller": request.caller,
-            "current_count": 0,
-        }
-    )
-    
-    return {
-        "stream_id": stream_id,
-        "message": f"Started notification stream for {caller}",
-        "interval": interval,
-        "count": count,
-    }
-
-
-@mcp.tool()
-def get_stream_status(stream_id: str) -> Dict[str, Any]:
-    """Get the status of a notification stream."""
-    stream_data = event_store.get_stream_data(stream_id)
-    if not stream_data:
-        return {"error": "Stream not found"}
-    
-    return {
-        "stream_id": stream_id,
-        "data": stream_data,
-        "status": "active" if stream_data.get("current_count", 0) < stream_data.get("count", 0) else "completed"
-    }
-
-
-@mcp.tool()
-def list_streams() -> List[str]:
-    """List all active notification streams."""
-    return event_store.list_streams()
-
+logger = logging.getLogger(__name__)
 
 def create_app():
-    """Create and return the FastMCP application."""
-    return mcp.http_app()
+    """Create and return the MCP StreamableHttp ASGI application."""
+    
+    app = Server("mcp-streamable-http-demo")
+
+    @app.call_tool()
+    async def call_tool(
+        name: str, arguments: dict
+    ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+        ctx = app.request_context
+        interval = arguments.get("interval", 1.0)
+        count = arguments.get("count", 5)
+        caller = arguments.get("caller", "unknown")
+
+        for i in range(count):
+            notification_msg = (
+                f"[{i+1}/{count}] Event from '{caller}' - "
+                f"Use Last-Event-ID to resume if disconnected"
+            )
+            await ctx.session.send_log_message(
+                level="info",
+                data=notification_msg,
+                logger="notification_stream",
+                related_request_id=ctx.request_id,
+            )
+            logger.debug(f"Sent notification {i+1}/{count} for caller: {caller}")
+            if i < count - 1:  # Don't wait after the last notification
+                await anyio.sleep(interval)
+
+        await ctx.session.send_resource_updated(uri=AnyUrl("http:///test_resource"))
+        return [
+            types.TextContent(
+                type="text",
+                text=(
+                    f"Sent {count} notifications with {interval}s interval"
+                    f" for caller: {caller}"
+                ),
+            )
+        ]
+
+    @app.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return [
+            types.Tool(
+                name="start-notification-stream",
+                description=(
+                    "Sends a stream of notifications with configurable count"
+                    " and interval"
+                ),
+                inputSchema={
+                    "type": "object",
+                    "required": ["interval", "count", "caller"],
+                    "properties": {
+                        "interval": {
+                            "type": "number",
+                            "description": "Interval between notifications in seconds",
+                        },
+                        "count": {
+                            "type": "number",
+                            "description": "Number of notifications to send",
+                        },
+                        "caller": {
+                            "type": "string",
+                            "description": (
+                                "Identifier of the caller to include in notifications"
+                            ),
+                        },
+                    },
+                },
+            )
+        ]
+
+    event_store = InMemoryEventStore()
+
+    session_manager = StreamableHTTPSessionManager(
+        app=app,
+        event_store=event_store,  # Enable resumability
+        json_response=False,
+    )
+
+    async def handle_streamable_http(
+        scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        await session_manager.handle_request(scope, receive, send)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        """Context manager for managing session manager lifecycle."""
+        async with session_manager.run():
+            logger.info("Application started with StreamableHTTP session manager!")
+            try:
+                yield
+            finally:
+                logger.info("Application shutting down...")
+
+    starlette_app = Starlette(
+        debug=True,
+        routes=[
+            Mount("/mcp", app=handle_streamable_http),
+        ],
+        lifespan=lifespan,
+    )
+
+    return starlette_app
