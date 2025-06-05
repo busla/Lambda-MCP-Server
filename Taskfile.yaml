@@ -30,17 +30,17 @@ tasks:
   deploy:
     desc: Deploy SAM application to AWS
     cmds:
-      - sam deploy --guided
+      - sam deploy --resolve-s3 --resolve-image-repos
 
   deploy-x86:
     desc: Deploy SAM application for x86_64 architecture
     cmds:
-      - sam deploy --config-env x86_64
+      - sam deploy --config-env x86_64 --resolve-s3 --resolve-image-repos
 
   deploy-arm64:
     desc: Deploy SAM application for ARM64 architecture
     cmds:
-      - sam deploy --config-env arm64
+      - sam deploy --config-env arm64 --resolve-s3 --resolve-image-repos
 
   local-api:
     desc: Start local API Gateway for testing
@@ -65,19 +65,19 @@ tasks:
   test-inspector-list-tools:
     desc: List tools on MCP server using Inspector CLI
     cmds:
-      - echo "Usage: task test-inspector-list-tools SERVER=<server_name>"
+      - echo "Usage task test-inspector-list-tools SERVER=server_name"
       - source .venv/bin/activate && mcp-cli tool list --server {{.SERVER}}
 
   test-inspector-call-tool:
     desc: Call a tool on MCP server using Inspector CLI
     cmds:
-      - echo "Usage: task test-inspector-call-tool SERVER=<server_name> TOOL=<tool_name> INPUT='<json_input>'"
+      - echo "Usage task test-inspector-call-tool SERVER=server_name TOOL=tool_name INPUT=json_input"
       - source .venv/bin/activate && mcp-cli tool call {{.TOOL}} --server {{.SERVER}} --input '{{.INPUT}}'
 
   test-inspector-read-resource:
     desc: Read a resource on MCP server using Inspector CLI
     cmds:
-      - echo "Usage: task test-inspector-read-resource SERVER=<server_name> URI=<resource_uri>"
+      - echo "Usage task test-inspector-read-resource SERVER=server_name URI=resource_uri"
       - source .venv/bin/activate && mcp-cli tool read {{.URI}} --server {{.SERVER}}
 
   clean:
@@ -110,6 +110,50 @@ tasks:
     desc: Delete CloudFormation stack
     cmds:
       - sam delete --stack-name {{.STACK_NAME}}
+
+  test-deployed:
+    desc: Test deployed MCP Lambda endpoint with StreamableHttp protocol
+    cmds:
+      - |
+        curl -v -X POST https://872mcrydl1.execute-api.eu-central-1.amazonaws.com/prod/mcp/ \
+          -H "Content-Type: application/json" \
+          -H "Accept: application/json, text/event-stream" \
+          -d '{
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+              "protocolVersion": "2024-11-05",
+              "capabilities": {
+                "roots": {"listChanged": true},
+                "sampling": {}
+              },
+              "clientInfo": {
+                "name": "test-client",
+                "version": "1.0.0"
+              }
+            }
+          }'
+
+  test-deployed-tools:
+    desc: Test deployed MCP Lambda tools/list endpoint
+    cmds:
+      - |
+        curl -v -X POST https://872mcrydl1.execute-api.eu-central-1.amazonaws.com/prod/mcp/ \
+          -H "Content-Type: application/json" \
+          -H "Accept: application/json, text/event-stream" \
+          -d '{
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+          }'
+
+  test-inspector-npx:
+    desc: Test MCP server using npx inspector CLI
+    cmds:
+      - echo "Testing MCP server with npx inspector..."
+      - npx @modelcontextprotocol/inspector --config mcp_inspector_config.json
 
   all:
     desc: Complete setup, build, and deploy workflow

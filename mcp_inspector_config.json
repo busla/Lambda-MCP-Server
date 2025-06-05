@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "lambda-server": {
+      "command": "curl",
+      "args": [
+        "-X", "POST",
+        "https://872mcrydl1.execute-api.eu-central-1.amazonaws.com/prod/mcp/",
+        "-H", "Content-Type: application/json",
+        "-H", "Accept: application/json"
+      ],
+      "env": {}
+    }
+  }
+}

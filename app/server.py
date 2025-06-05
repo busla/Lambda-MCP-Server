@@ -95,7 +95,7 @@ def create_app():
         session_manager = StreamableHTTPSessionManager(
             app=app,
             event_store=event_store,  # Enable resumability
-            json_response=False,
+            json_response=True,  # Use StreamableHttp protocol, not SSE
         )
         
         async with session_manager.run():
